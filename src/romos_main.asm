@@ -1,5 +1,5 @@
 ;*******************************************
-;                ROM-OS v1.6.0 -beta
+;                ROM-OS v1.6.0 - beta
 ;         (c)2022 LE COSSEC Arnaud
 ;         lecossec.arnaud@gmail.com
 ;   Description : Operating System for the 
@@ -15,30 +15,34 @@
 ;       1.2 - Commands implementation : /RUN /LOAD /SAVE (none works)
 ;       1.3 - implement ">j xxxx" -> "jump" command for the monitor
 ;           - /RUN and /LOAD fixed
-;			- /IN implemented but not tested
-;		1.4 - complete system rewrite with new memory map
-;			[Snapshot_08_02_22] : System boot, Interrupts and MON_READ
-;			[Snapshot_07_03_22a] : MON_WRITE fixed
-;			[Snapshot_09_04_22a] : Clear RX_BUFFER_COM1 and RX_BUFFER_COM2, avoiding random characters when performing cold startups
-;								 : xxx1 address bug fixed ! clearing [A] register and thus error bit before return from Interpreter_ADDR
-;								 : MON_ERASE fixed
-;			[Snapshot_10_04_22a] : MON_COPY Re-implemented
-;			[Snapshot_10_04_22b] : MON_JUMP Re-implemented
-;			[Snapshot_10_04_22c] : CMD_IN Fixed - KEYPOINTER+2 instead of KEYPOINTER+4
-;			[Snapshot_12_04_22a] : SEEK_CHAR created to simplify character research in commands
-;								 : CMD_OUT implemented
-;			[Snapshot_12_04_22b] : CMD_SWAP implemented
-;			[Snapshot_14_04_22a] : Command interpreting fixed
-;			[Snapshot_14_04_22b] : General optimization
-;								 : VIA PORTB as output by default
-; 		1.5 - Serial communication update
-;			[Snapshot_17_04_22a] : Serial transmit auto delay selection added
-;			[Snapshot_18_04_22a] : /COM1 & /COM2 Commands Added - allow user to set the default serial channel
-;								 : /SET1 & /SET2 Commands Added - allow user to set-up COM1 & COM2
-;			[Snapshot_19_04_22a] : New default serial config : 4800 Bauds; 8bits; No parity
-;		
-;               1.6 - STARTUP & DIAGNOSTIC UPDATE
-;                       [Snapshot_27_06_23a] : commenting & ACK_LOOP renamed as MAIN_LOOP
+;           - /IN implemented but not tested
+;       1.4 - complete system rewrite with new memory map
+;                       [Snapshot_08_02_22] : System boot, Interrupts and MON_READ
+;                       [Snapshot_07_03_22a] : MON_WRITE fixed
+;                       [Snapshot_09_04_22a] : Clear RX_BUFFER_COM1 and RX_BUFFER_COM2, avoiding random characters when performing cold startups
+;                                                                : xxx1 address bug fixed ! clearing [A] register and thus error bit before return from Interpreter_ADDR
+;                                                                : MON_ERASE fixed
+;                       [Snapshot_10_04_22a] : MON_COPY Re-implemented
+;                       [Snapshot_10_04_22b] : MON_JUMP Re-implemented
+;                       [Snapshot_10_04_22c] : CMD_IN Fixed - KEYPOINTER+2 instead of KEYPOINTER+4
+;                       [Snapshot_12_04_22a] : SEEK_CHAR created to simplify character research in commands
+;                                                                : CMD_OUT implemented
+;                       [Snapshot_12_04_22b] : CMD_SWAP implemented
+;                       [Snapshot_14_04_22a] : Command interpreting fixed
+;                       [Snapshot_14_04_22b] : General optimization
+;                                                                : VIA PORTB as output by default
+;       1.5 - Serial communication update
+;                       [Snapshot_17_04_22a] : Serial transmit auto delay selection added
+;                       [Snapshot_18_04_22a] : /COM1 & /COM2 Commands Added - allow user to set the default serial channel
+;                                                                : /SET1 & /SET2 Commands Added - allow user to set-up COM1 & COM2
+;                       [Snapshot_19_04_22a] : New default serial config : 4800 Bauds; 8bits; No parity
+;                       [Snapshot_04_07_22a] : INC_16Bit_MemVal : Increments a 16 bit value in memory, hl=address
+;                                            : "> shortcut loops between two pages" bug fixed
+;                       [Snapshot_04_07_22b] : /SAVE AAAA,BBBB;C implemented
+;                       [Snapshot_24_07_22a] : /LOAD AAAA;C Updated
+;                       [Snapshot_09_08_22a] : /LOAD AAAA;C Updated
+;       1.5.1 - Release candidate
+;                       [Snapshot_27_06/23a] : commenting & ACK_LOOP renamed into MAIN_LOOP                     
 ;*******************************************
 ; LABELS ASSIGNATION
 ;*******************************************
@@ -83,100 +87,102 @@ IRQ_VECTOR     = $FFFE
 MON_ADDR_CACHE = $FFE0
 MON_LINE_CACHE = $FFE2
 MON_PRINT_BUFFER = $FFE4
+PREVIOUS_COM_CHANNEL = $FFE8
+CURRENT_COM_CHANNEL = $FFE9
 
 ;*******************************************
 ; SETUP 
 ;*******************************************
 
 .org $0002
- di 									; Disable interrupts
- im 1 									; Set interrupt mode to 1
+ di                                     ; Disable interrupts
+ im 1                                   ; Set interrupt mode to 1
 
- ld sp,STACK   								; Define stack pointer memory start
+ ld sp,STACK                            ; Define stack pointer memory start
 
- ld hl,KEYBUFFER 							; Initialize KEYPOINTER
+ ld hl,KEYBUFFER                        ; Initialize KEYPOINTER
  ld (KEYPOINTER),hl 
 
- ld hl,ACIA_RX_IRQ 							; Initialize IRQ_VECTOR
+ ld hl,ACIA_RX_IRQ                      ; Initialize IRQ_VECTOR
  ld (IRQ_VECTOR),hl 
 
 
 
- jp STARTUP								; Jump to startup sequence
+ jp STARTUP                             ; Jump to startup sequence
 
-.org $0035 								; Loop return anchor point
+.org $0035                              ; Loop return anchor point
  jp LOOP_RETURN
  
 ;*******************************************
 ; INTERRUPT
 ;*******************************************
 .org $0038 ; IRQ
- di 					; Disable interrupts
- EXX 					; Save registers
- ld hl,(IRQ_VECTOR) 			; Load HL with the IRQ Vector (Address of the IRQ handler)
- jp (hl) 				; Jump tp the IRQ handler
+ di                                     ; Disable interrupts
+ EXX                                    ; Save registers
+ ld hl,(IRQ_VECTOR)                     ; Load HL with the IRQ Vector (Address of the IRQ handler)
+ jp (hl)                                ; Jump tp the IRQ handler
  
 
-ACIA_RX_IRQ: 				; IRQ handler for ACIA
- in a,(ACIA_RST_ST | COM1)	 	;	Check if COM1 generated an interrupt 
+ACIA_RX_IRQ:                            ; IRQ handler for ACIA
+ in a,(ACIA_RST_ST | COM1)              ;       Check if COM1 generated an interrupt 
  AND %10000000
- jr nz, IRQ_Return 			; 	If not, check COM2
- in a,(ACIA_RW | COM1)	 		; 	If so, save RX register into RX buffer
+ jr nz, IRQ_Return                      ;       If not, check COM2
+ in a,(ACIA_RW | COM1)                  ;       If so, save RX register into RX buffer
  ld (RX_BUFFER_COM1),a
 ;ACIA_RX_IRQ_Next:
-; in a,(ACIA_RST_ST | COM2)	 	;	Check if COM2 generated an interrupt 
+; in a,(ACIA_RST_ST | COM2)             ;       Check if COM2 generated an interrupt 
 ; AND %10000000
-; jr nz, IRQ_Return 			; 	If not, Return from interrupt
-; in a,(ACIA_RW | COM2) 		; 	If so, save RX register into RX buffer
+; jr nz, IRQ_Return                     ;       If not, Return from interrupt
+; in a,(ACIA_RW | COM2)                 ;       If so, save RX register into RX buffer
 ; ld (RX_BUFFER_COM2),a
 
-IRQ_Return:											
- EXX					; Retrieve registers
- ei 					; Enable interrupts back
- reti 					; Retrun from interrupt
+IRQ_Return:                                                                                     
+ EXX                                    ; Retrieve registers
+ ei                                     ; Enable interrupts back
+ reti                                   ; Retrun from interrupt
 
 ;*******************************************
 ; STARTUP
 ;*******************************************
 
 STARTUP:
- 					; Initialize ACIA - COM1
- out (ACIA_RST_ST | COM1 ),a 		; 	soft reset (value not important)
- ld a,%01101001 			; 	disable parity, echo mode , enable RX interrupt and enable reciver/transmiter
+                                        ; Initialize ACIA - COM1
+ out (ACIA_RST_ST | COM1 ),a            ;       soft reset (value not important)
+ ld a,%01101001                         ;       disable parity, echo mode , enable RX interrupt and enable reciver/transmiter
  out (ACIA_CMD | COM1 ),a
- ld a,%00011100				; 	4800 bauds; 8 data bits; no parity; 1 stop bit
- ld (COM1_SETTINGS),a 			; 	Save COM1 Settings
- out (ACIA_CTR | COM1),a
- 					; Initialize ACIA - COM2
- out (ACIA_RST_ST | COM2 ),a 		; 	soft reset (value not important)
- ld a,%01101001 			; 	disable parity, echo mode , enable RX interrupt and enable reciver/transmiter
+ ld a,%00011100                         ;       4800 bauds; 8 data bits; no parity; 1 stop bit
+ ld (COM1_SETTINGS),a                   ;       Save COM1 Settings
+ out (ACIA_CTR | COM1),a 
+                                        ; Initialize ACIA - COM2
+ out (ACIA_RST_ST | COM2 ),a            ;       soft reset (value not important)
+ ld a,%01101001                         ;       disable parity, echo mode , enable RX interrupt and enable reciver/transmiter
  out (ACIA_CMD | COM2 ),a
- ld a,%00011100				; 	4800 bauds; 8 data bits; no parity; 1 stop bit
- ld (COM2_SETTINGS),a 			; 	Save COM2 Settings  
+ ld a,%00011100                         ;       4800 bauds; 8 data bits; no parity; 1 stop bit
+ ld (COM2_SETTINGS),a                   ;       Save COM2 Settings  
  out (ACIA_CTR | COM2),a
  
- ld a,COM1                              ; Make COM1 the default channel
+ ld a,COM1                              ;   Make COM1 the default channel
  ld (COM_SELECT),a
 
- ld a,$FF 				; Set VIA PORTB as output by default
+ ld a,$FF                               ; Set VIA PORTB as output by default
  out (VIA_DDRB),a
 
- ld hl,$8000 				; Perform memory verification from $8000 to $7EFF (User RAM)
- ld de,$7EFF				; Also clears selected RAM
+ ld hl,$8000                            ; Perform memory verification from $8000 to $7EFF (User RAM)
+ ld de,$7EFF                            ; Also clears selected RAM
  call MemCheck
  
- ld a,$C9 				; Emergency RETurn at the end of USER RAM space, in case the user forgot to put one
+ ld a,$C9                               ; Emergency RETurn at the end of USER RAM space, in case the user forgot to put one
  ld ($FEFF),a
 
- ld a,$00 				; Clear serial input buffers
+ ld a,$00                               ; Clear serial input buffers
  ld (RX_BUFFER_COM1),a
  ld (RX_BUFFER_COM2),a
 
- ld a,$0C  				; Clear terminal
+ ld a,$0C                               ; Clear terminal
  call Char_SEND
 
  ld hl,MSG                              ; send startup message
- ld de,$6B
+ ld de,$6D
  call Serial_SEND
 
  ei
@@ -198,11 +204,11 @@ MAIN_LOOP:                              ; MAIN LOOP
  ld a,b
                                         ;   Check data
 
- cp $7F 				;	'DEL'
+ cp $7F                                 ;   'DEL'
  jr z,KEY_DELETE
 
- cp $20 				;	Regular ASCII char > $20
- jr nc,KEY_ADD 							
+ cp $20                                 ;   Regular ASCII char > $20
+ jr nc,KEY_ADD                                                  
 
  cp $08                                 ;   Backspace
  jr z,KEY_DELETE
@@ -317,12 +323,12 @@ MON_READ_BACKWARD:                      ; MON_READ_BACKWARD : shortcut "<" to se
  ld (MON_ADDR_CACHE),hl
  jr MON_READ_INIT
 
-MON_READ:                             	; MON_READ : decodes the command's argument
+MON_READ:                               ; MON_READ : decodes the command's argument
  ld hl,KEYBUFFER+1
  call Interpreter_ADDR
  cp $1
  jp z,SYNTAX_ERROR
- ld (MON_ADDR_CACHE),de              	;   Store decoded address in RAM
+ ld (MON_ADDR_CACHE),de                 ;   Store decoded address in RAM
 
 MON_READ_INIT:
  ld a,$0
@@ -336,16 +342,16 @@ MON_READ_LOOP:
 
 
 MON_READ_LINE:
- call PRINT_CR_LF 			; New line : Carriage return, Line feed
+ call PRINT_CR_LF                       ; New line : Carriage return, Line feed
 
 ;[DISPLAY START ADDRESS]
- ld hl,(MON_ADDR_CACHE)              	;   Convert the most significant byte it to hexadecimal (ASCII format)
- push hl 			     	;   Save reading address for later
+ ld hl,(MON_ADDR_CACHE)                 ;   Convert the most significant byte it to hexadecimal (ASCII format)
+ push hl                                ;   Save reading address for later
  ld a,h
  call BinToASCII
  ld (MON_PRINT_BUFFER),de
 
- ld hl,(MON_ADDR_CACHE)		        ;   Convert the least significant byte it to hexadecimal (ASCII format)
+ ld hl,(MON_ADDR_CACHE)                 ;   Convert the least significant byte it to hexadecimal (ASCII format)
  ld a,l
  call BinToASCII 
  ld (MON_PRINT_BUFFER+2),de
@@ -365,22 +371,22 @@ MON_READ_LINE_LOOP_1:
  
  call BinToASCII                        ;   Convert read byte to ascii
  ld (MON_PRINT_BUFFER),de
- ld hl,MON_PRINT_BUFFER 		;   Display it
+ ld hl,MON_PRINT_BUFFER                 ;   Display it
  ld de,$1
  call Serial_SEND  
  
  ld hl,MON_ADDR_CACHE
- inc (hl) 				; Inc reading address
- djnz MON_READ_LINE_LOOP_1		; decrement b, if b=0 then continue, otherwise loop again
+ call INC_16Bit_MemVal                  ; Increment reading address
+ djnz MON_READ_LINE_LOOP_1              ; Decrement b, if b=0 then continue, otherwise loop again
 
-;[DISPLAY ASCII] 							Ascii representation of the bytes read
+;[DISPLAY ASCII]                        Ascii representation of the bytes read
  ld a,$20                               ;   send "space"
  call Char_SEND
- pop hl 				;  Retreive first reading address
+ pop hl                                 ;  Retreive first reading address
  ld (MON_ADDR_CACHE),hl
  ld b,$08
 MON_READ_LINE_LOOP_2:
- ld hl,(MON_ADDR_CACHE)            	;   Load reading address
+ ld hl,(MON_ADDR_CACHE)                 ;   Load reading address
  ld a,(hl)
 
  cp $7F                                 ;   If Byte >= $7F
@@ -394,8 +400,8 @@ MON_READ_LINE_4:
  call Char_SEND
  
  ld hl,MON_ADDR_CACHE
- inc (hl) 				; Inc reading address
- djnz MON_READ_LINE_LOOP_2		; decrement b, if b=0 then continue, otherwise loop again
+ call INC_16Bit_MemVal                  ; Increment reading address
+ djnz MON_READ_LINE_LOOP_2              ; Decrement b, if b=0 then continue, otherwise loop again
 
 ;[LINE END]
  ld hl,MON_LINE_CACHE
@@ -438,7 +444,7 @@ MON_ERASE:                              ; MON_ERASE : erases an area of memory :
  cp $1
  jp z,SYNTAX_ERROR
  ld (MON_ADDR_CACHE),de
-										;   interpreting the end address
+                                                                                ;   interpreting the end address
  call SEEK_CHAR                         ;   If keyboard buffer at hl is 'space', we search further
  cp ","
  jp nz,SYNTAX_ERROR                     ;   Else if keyboard buffer at hl is different than ',', display error
@@ -453,7 +459,7 @@ MON_ERASE_LOOP:                         ;   Erasing loop
  inc hl                                 ;   Increment hl
  ld (MON_ADDR_CACHE),hl
  sbc hl,de                              ;   Compare hl with de (end address). if hl < de then continue...
- jr c,MON_ERASE_LOOP
+ jr nz,MON_ERASE_LOOP
  jp LOOP_RETURN                         ;   Else go back to main loop (MAIN_LOOP)
 
 
@@ -464,7 +470,7 @@ MON_COPY:                               ; MON_COPY : Copies a block of data to a
  cp $1
  jp z,SYNTAX_ERROR
  ld (MON_ADDR_CACHE),de                 ;   Save Start address
-					;   -> Decoding the command's End address
+                                                                                ;   -> Decoding the command's End address
  call SEEK_CHAR                         ;   If keyboard buffer at hl is 'space', we search further
  cp ","                                 ;   Else if keyboard buffer at hl is different than ',', display error
  jp nz,SYNTAX_ERROR                     
@@ -473,7 +479,7 @@ MON_COPY:                               ; MON_COPY : Copies a block of data to a
  cp $1
  jp z,SYNTAX_ERROR
  ld (MON_ADDR_CACHE+2),de               ;   Save End address
-					;   -> Decoding the command's New address
+                                                                                ;   -> Decoding the command's New address
  call SEEK_CHAR                         ;   If keyboard buffer at hl is 'space', we search further
  cp ";"                                 ;   Else if keyboard buffer at hl is different than ';', display error
  jp nz,SYNTAX_ERROR                     
@@ -561,7 +567,7 @@ INTERPRETER_CMD_2:                      ;   Character Selection
 ; COMMAND ROUTINES
 ; ******************************************
 
- CMD_RUN:                                ; /RUN COMMAND
+ CMD_RUN:                               ; /RUN COMMAND
  ld hl,WORKING_MSG                      ;   Send "WORKING" message
  ld de,$0C
  call Serial_SEND
@@ -569,9 +575,26 @@ INTERPRETER_CMD_2:                      ;   Character Selection
  call $8000                             ;   Call user program via a subroutine - users have to end their program with RETurn command
  jp LOOP_RETURN                         ;   User program terminated, go back to main loop
 
-CMD_LOAD:                               ; /LOAD COMMAND
+CMD_LOAD:                               ; /LOAD AAAA;C COMMAND
+ ld hl,KEYBUFFER+4
+ call Interpreter_ADDR
+ cp $1
+ jp z,SYNTAX_ERROR
+ ld (MON_ADDR_CACHE),de                 ;   Save New address
+
+ call SEEK_CHAR                         ;   If keyboard buffer at hl is 'space', we search further
+ cp ";"                                 ;   Else if keyboard buffer at hl is different than ';', display error
+ jp nz,SYNTAX_ERROR   
+
+ call SaveSerialChannel                 ;   Save COM channel
+
+ call ChangeSerialChannel               ;   Prepare serial COM channel change
+ cp $FF
+ jp z,SYNTAX_ERROR 
+ ld b,a                                 ;   New channel saved in register b
+ 
  ld hl,CANCEL_MSG                       ;   Send "PRESS ANY KEY TO CANCEL" message
- ld de,$18
+ ld de,$1A
  call Serial_SEND
 
  call CharLOAD                          ;   Watch for a character to arrive
@@ -583,7 +606,10 @@ CMD_LOAD:                               ; /LOAD COMMAND
  ld de,$09
  call Serial_SEND
 
- ld hl,$8000                            ;   Initiate hl with the start of user program space
+ ld a,b                                 ;   Retrieve new COM channel stored in register b
+ ld (COM_SELECT),a                      ;   Apply new COM channel
+
+ ld hl,(MON_ADDR_CACHE)                 ;   Initiate hl with the start of user program space
  ld b,$00                               ;   Counter to zero
 CMD_LOAD_LOOP:                          ;   CMD_LOAD_LOOP : Loading sequence
  call CharLOAD                          ;   Watch for a character to arrive
@@ -596,6 +622,13 @@ CMD_LOAD_LOOP:                          ;   CMD_LOAD_LOOP : Loading sequence
  cp $08                                 ;   If counter < 8 
  jr c,CMD_LOAD_LOOP                     ;   Then loop back to CMD_LOAD_LOOP to load other characters
                                         ;   Otherwise the loading sequence is terminated
+ inc b
+ ld a,0            
+CMD_LOAD_END:                           ;   Erase "End of transmission" Characters
+ ld (hl),a 
+ dec hl 
+ djnz CMD_LOAD_END
+ call RetrieveSerialChannel             ;   Restore previous COM channel
  ld hl,LOADING_DONE_MSG                 ;   Send "DONE" message
  ld de,$03
  call Serial_SEND
@@ -612,12 +645,62 @@ CMD_LOAD_ERROR:                         ;   CMD_LOAD_ERROR
  call Serial_SEND
  jp LOOP_RETURN                         ;   Go back to main loop (MAIN_LOOP)
  
-CMD_SAVE:                               ; /SAVE (not implemented)
- ld a,"S"
+CMD_SAVE:                               ; /SAVE AAAA,BBBB,C      (AAAA: Start Address, BBBB: End Address, C: COM Channel)
+ ld hl,KEYBUFFER+4
+ call Interpreter_ADDR
+ cp $1
+ jp z,SYNTAX_ERROR
+ ld (MON_ADDR_CACHE),de                 ;   Save New address
+ 
+ call SEEK_CHAR                         ;   If keyboard buffer at hl is 'space', we search further
+ cp ","                                 ;   Else if keyboard buffer at hl is different than ',', display error
+ jp nz,SYNTAX_ERROR                     
+
+ call Interpreter_ADDR
+ cp $1
+ jp z,SYNTAX_ERROR
+ ld (MON_ADDR_CACHE+2),de               ;   Save End address
+
+ call SEEK_CHAR                         ;   If keyboard buffer at hl is 'space', we search further
+ cp ";"                                 ;   Else if keyboard buffer at hl is different than ';', display error
+ jp nz,SYNTAX_ERROR   
+
+ call SaveSerialChannel                 ;   Save COM channel
+
+ call ChangeSerialChannel
+ cp $FF
+ jp z,SYNTAX_ERROR 
+ ld (COM_SELECT),a
+
+;   Send Transmission Header ****
+ ld a,$01                               
  call Char_SEND
+;   Send Data *******************
+CMD_SAVE_LOOP:
+ ld hl,(MON_ADDR_CACHE)                 ;   Retrieve Start address in hl
+ ld a,(hl)
+ call Char_SEND
+ inc hl
+ ld (MON_ADDR_CACHE),hl
+ ld de,(MON_ADDR_CACHE+2)               ;   Retrieve Start address in de
+ sbc hl,de                              ;   Compare hl with de (end address). if hl < de then continue...
+ jr nz,CMD_SAVE_LOOP
+;   Send Transmission End *******
+ ld b,$08
+CMD_SAVE_END_LOOP:
+ ld a,$04
+ push bc
+ call Char_SEND
+ pop bc
+ djnz CMD_SAVE_END_LOOP 
+
+ call RetrieveSerialChannel            ;   Restore previous COM channel
+ 
  jp LOOP_RETURN
 
-CMD_SET: 								; /SET1 & /SET2 Commands
+
+
+CMD_SET:                                ; /SET1 & /SET2 Commands
  ld hl,KEYBUFFER+4
  call SEEK_CHAR                         ;   If keyboard buffer at hl is 'space', we search further                                 
  call AsciiToHex                        ;   Convert user input (ASCII string) into a byte
@@ -637,7 +720,7 @@ CMD_SET2:
  ld (COM2_Settings),a
  jp LOOP_RETURN
 
-CMD_COM1: 								; /COM1
+CMD_COM1:                               ; /COM1
  ld a,COM1                              ; Make COM1 the default channel
  ld (COM_SELECT),a
  jp LOOP_RETURN
@@ -699,17 +782,53 @@ CMD_BANK:                               ; /BANK ( ISSUE II specific)
 ; MISCELLANEOUS ****************************
 
 PRINT_CR_LF:
- ld a,$0D                       	;	carriage return 
+ ld a,$0D                               ;       PRINT_CR_LF Carriage return 
  call Char_SEND
- ld a,$0A 				;   Line feed and 
+ ld a,$0A                               ;   Line feed and 
  call Char_SEND
  ret
 
-SEEK_CHAR:
+SEEK_CHAR:                              ;  SEEK_CHAR If keyboard buffer at hl is 'space', we search further  
  inc hl
  ld a,(hl)
  cp $20
  jr z,SEEK_CHAR
+ ret
+
+INC_16Bit_MemVal:                       ;   hl : address of the 16 bit value that will be incremented
+ ld e,(hl)
+ inc hl 
+ ld d,(hl)
+ inc de 
+ ld (hl),d 
+ dec hl 
+ ld (hl),e 
+ ret
+
+SaveSerialChannel:                      ;   SaveSerialChannel : Stores current serial channel
+ ld a,(COM_SELECT)
+ ld (PREVIOUS_COM_CHANNEL),a
+ ret
+
+RetrieveSerialChannel:                  ;   RetrieveSerialChannel : Restore previous serial channel
+ ld a,(PREVIOUS_COM_CHANNEL)
+ ld (COM_SELECT),a
+ ret
+
+ChangeSerialChannel:                    ;   Interprets user input to prepare a serial channel change. a(output) = New COM channel
+ inc hl 
+ ld a,(hl)
+ cp '1'
+ jr z,ChangeSerialChannel_1
+ cp '2'
+ jr z,ChangeSerialChannel_2
+ ld a,$FF           ; a = 0 : SYNTAX_ERROR
+ ret
+ChangeSerialChannel_1:
+ ld a,COM1                              ;   Change COM channel for COM1
+ ret
+ChangeSerialChannel_2:
+ ld a,COM2                              ;   Change COM channel for COM2
  ret
 
 ; Decodes an address written in ASCII
@@ -729,7 +848,7 @@ Interpreter_ADDR:                       ; Interpreter_ADDR  de = address output 
  bit 0,b                                ;   If b = 1, Send an error
  jr nz,Interpreter_ADDR_Error
  ld e,a                                 ;   Output
- ld a,$0								; 	clear error bit
+ ld a,$0                                                                ;       clear error bit
  ret                                    ;   Return from subroutine
 Interpreter_ADDR_Error:                 ;   Error handeling
  ld a,$1                                ;   If an error occured, register it register a
@@ -740,9 +859,9 @@ Interpreter_ADDR_Error:                 ;   Error handeling
 ; TEXT DATA *****************************
 WORKING_MSG:
  .db " WORKING..."
+CANCEL_MSG:
  .db $0D ; carriage return
  .db $0A ; line feed
-CANCEL_MSG:
  .db "PRESS ANY KEY TO CANCEL"
  .db $0D ; carriage return
  .db $0A ; line feed
@@ -762,7 +881,7 @@ MSG:
  .db "ZEPHYR COMPUTER SYSTEMS LTD."
  .db $0D ; carriage return
  .db $0A ; line feed
- .db "ROM-OS v1.6 (c)2022 LE COSSEC Arnaud"
+ .db "ROM-OS v1.5.1 (c)2022 LE COSSEC Arnaud"
  .db $0D ; carriage return
  .db $0A ; line feed
  .db "32,511 BYTES FREE [Snapshot 27/06/23a]"
@@ -785,9 +904,9 @@ Serial_SEND:                            ;   Load registers as follow hl = start 
  ;AND %00010000                         ;   when using the original 6551 chip (not WDC W65C51 that have bugs and thus require the delay)
  ;jp z,Serial_SEND
 
- call Serial_Delay 						;   Set delay between characters sent (1)
+ call Serial_Delay                                              ;   Set delay between characters sent (1)
 
- ld a,(COM_SELECT) 						;	Select Port ( ACIA_RW | COM_SELECT )
+ ld a,(COM_SELECT)                                              ;       Select Port ( ACIA_RW | COM_SELECT )
  OR ACIA_RW
  ld c,a
  ld a,(hl)                              ;   Load data from address pointed by hl
@@ -810,19 +929,19 @@ Serial_SEND:                            ;   Load registers as follow hl = start 
 ;*****************THIS SUBROUTINE WORKS !!!!
 ; -> Sends a single byte to selected serial port
 Char_SEND:
- push af 			        ;   Save a
+ push af                                ;       Save a
 Char_1:
- ;in a,(ACIA_RST_ST) 			;   To use instead of delay (remove line featuring (1))
- ;AND %00010000 			;   When using the original 6551 chip (not WDC W65C51 that have bugs and thus require the delay)
+ ;in a,(ACIA_RST_ST)                    ;   To use instead of delay (remove line featuring (1))
+ ;AND %00010000                         ;   When using the original 6551 chip (not WDC W65C51 that have bugs and thus require the delay)
  ;jp z,Char_1
 
- call Serial_Delay 			;   Set delay between characters sent (1)
+ call Serial_Delay                      ;   Set delay between characters sent (1)
 
- ld a,(COM_SELECT) 			;   Select Port ( ACIA_RW | COM_SELECT )
+ ld a,(COM_SELECT)                      ;       Select Port ( ACIA_RW | COM_SELECT )
  OR ACIA_RW
  ld c,a
 
- pop af 				;   Retrieve a
+ pop af                                 ;       Retrieve a
  out (c),a
  ret
 
@@ -838,7 +957,7 @@ Serial_Delay:
 Serial_Delay_COM1:
  ld a,(hl)
  AND $0F
- rlca 	; a*2
+ rlca   ; a*2
  ld hl,BAUD_DELAY_TABLE
  add a,l
  ld l,a
@@ -890,19 +1009,19 @@ BAUD_DELAY_TABLE:
 .org $2100
 ;*****************THIS SUBROUTINE WORKS !!!!
 CharLOAD: ; will watch for a char to be recived
- ld a,(COM_SELECT) 						;	Select Port ( ACIA_RST_ST | COM_SELECT )
+ ld a,(COM_SELECT)                      ;       Select Port ( ACIA_RST_ST | COM_SELECT )
  OR ACIA_RST_ST
  ld c,a
 CharLOAD_LOOP:
  in a,(c)
- AND %00001000 							; 	If recive flag is not 0 (data recived), Loop again
+ AND %00001000                          ;       If recive flag is not 0 (data recived), Loop again
  jr z,CharLOAD
 
- ld a,(COM_SELECT) 						;	Select Port ( ACIA_RW | COM_SELECT )
+ ld a,(COM_SELECT)                      ;       Select Port ( ACIA_RW | COM_SELECT )
  OR ACIA_RW
  ld c,a
 
- in a,(c) 								;	Recived Char into register a
+ in a,(c)                               ;       Recived Char into register a
  ret
 
 
@@ -911,12 +1030,12 @@ CharLOAD_LOOP:
 .org $2180
 ;*****************THIS SUBROUTINE WORKS !!!!
 MemCheck: ; hl = start address / de = lenght of the test
- ld (hl),%11111111   					; fill RAM
+ ld (hl),%11111111                                      ; fill RAM
  nop
- ld a,(hl)   							; and check if the data is still there
+ ld a,(hl)                              ; and check if the data is still there
  cp $FF
  jp nz,RAM_ERROR
- ld (hl),$0   							; clear bytes checked
+ ld (hl),$0                             ; clear bytes checked
  inc hl
 
  dec de
@@ -930,7 +1049,7 @@ MemCheck: ; hl = start address / de = lenght of the test
  ret
 
 RAM_ERROR:
- ld hl,RAM_ERROR_MSG				 	; Send error message
+ ld hl,RAM_ERROR_MSG                    ; Send error message
  ld e,$09
 RAM_ERROR_1:
  ld bc, $0120
@@ -984,7 +1103,7 @@ BinToASCII: ; this subroutine converts a binary number into an ascii-based hex n
  call BinToASCII_Search ;-> look at the first nibble 
  ld d,(hl)
 
- pop af 				;-> look at the second nibble 
+ pop af                                 ;-> look at the second nibble 
  rra            
  rra
  rra
