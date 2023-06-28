@@ -45,6 +45,7 @@
 ;                       [Snapshot_27_06_23a] : commenting & ACK_LOOP renamed into MAIN_LOOP
 ;       1.6.0 - beta
 ;                       [Snapshot_27_06_23b] : Implement NMI vector
+;                       [Snapshot_28_06_23a] : Extended memory check and multiplication/division routines
 ;*******************************************
 ; LABELS ASSIGNATION
 ;*******************************************
@@ -182,8 +183,8 @@ STARTUP:
  ld a,$FF                               ; Set VIA PORTB as output by default
  out (VIA_DDRB),a
 
- ld hl,$8000                            ; Perform memory verification from $8000 to $7EFF (User RAM)
- ld de,$7EFF                            ; Also clears selected RAM
+ ld hl,$8000                            ; Perform memory verification from $8000 to $FEFF (User RAM)
+ ld de,$FEFF                            ; Also clears selected RAM
  call MemCheck
  
  ld a,$C9                               ; Emergency RETurn at the end of USER RAM space, in case the user forgot to put one
@@ -196,9 +197,11 @@ STARTUP:
  ld a,$0C                               ; Clear terminal
  call Char_SEND
 
- ld hl,MSG                              ; send startup message
+ ld hl,STARTUP_MSG                      ; send startup message
  ld de,$6D
  call Serial_SEND
+
+ call MemCheckExtended                  ; Perform exetended memory check to detect RAM extensions
 
  ei
  jp LOOP_RETURN
@@ -870,6 +873,75 @@ Interpreter_ADDR_Error:                 ;   Error handeling
  ret
 
 
+MemCheck: ; hl = start address / de = end address
+ ld bc,hl                               ; Save [hl] into [bc]
+MemCheck_loop:
+ ld hl,bc                               ; Retrieve [hl] from [bc]
+ ld (hl),%11111111                      ; Fill RAM
+ nop                                    ; Let the RAM settle
+ ld a,(hl)                              ; and check if the data is still there
+ cp $FF                                 
+ jp nz,MemCheck_RAM_Error               ; Display "RAM ERROR" and halt if the data is different
+ ld (hl),$0                             ; If the test passes, clear bytes checked
+ inc hl                                 ; Increment [hl] to check the next address 
+ ld bc,hl                               ; Save [hl] into [bc]
+ sub hl,de                              ; Test if [hl] = [de]
+ jr nz,MemCheck_loop:                   ; If not, continue
+ ret                                    ; If yes, return
+
+MemCheck_RAM_Error:
+ ld bc,$0009
+MemCheck_RAM_Error_loop:
+ ld de,$0100
+MemCheck_RAM_Error_wait:
+ ld hl,$0000                            ; T=10, 2.50µs@4MHz
+ dec de                                 ; T=6, 1.50µs@4MHz
+ sbc hl,de                              ; T=15, 3.75µs@4MHz
+ jr nz,MemCheck_RAM_Error_wait          ; T=7, 1.75µs@4MHz
+ ld hl,(MemCheck_RAM_Error_msg+9)
+ sbc hl,bc 
+ ld a,(hl)
+ out (ACIA_RW | COM1),a
+ djnz MemCheck_RAM_Error_loop
+ halt
+MemCheck_RAM_Error_msg:
+ .db "RAM ERROR"
+
+
+MemCheckExtended:
+ ld b,1                                 ;   Init [b] with the first bank index 
+ ld c,VIA_PORTB                         ;   Init [c] with VIA_PORTB IO address
+ ld hl,$4000                            ;   In this test, we only check the banks' first byte at $4000
+MemCheckExtended_loop:
+ out (c),b                              ;   Send register a to VIA_PORTB (Bank selection)
+ ld (hl),%11111111                      ;   Fill bank first address
+ nop
+ ld a,(hl)                              ;   Check if the data is still there
+ cp $FF 
+ jp nz,MemCheckExtended_next            ;   If the byte read is different than the byte written, the it is not counted and we continue
+ inc d                                  ;   But if not, it means we detected RAM and we increment the RAM bank count
+MemCheckExtended_next:
+ inc b                                  ;   Increment the bank index
+ jr nz, MemCheckExtended_loop           ;   If the bank index goes back to zero, it means we checked all 255 banks (bank #0 is part of the system ROM)
+ ld a,d                                 ;   Check if we found any RAM banks (if b is not zero) 
+ or a                                   ;   Update zero flag
+ ret z                                  ;   Return if we havn't found extra RAM
+ ld l,d                                 ;   If extra RAM has been found, then calculate the total of RAM found
+ ld a,16
+ call Mul8
+ call BinToDec                          ;   print num
+ ld hl, MemCheckExtended_msg
+ ld de, 29
+ call Serial_SEND
+ ret
+
+MemCheckExtended_msg:
+ .db " KB of extended memory found"
+ .db $0D
+ .db $0A
+
+
+
 
 ; TEXT DATA *****************************
 WORKING_MSG:
@@ -888,18 +960,16 @@ SYNTAX_ERROR_MSG:
  .db $0D ; carriage return
  .db $0A ; line feed
  .db "SYNTAX ERROR"
-RAM_ERROR_MSG:
- .db "RAM "
 ERROR_MSG:
  .db "ERROR"
-MSG:
+STARTUP_MSG:
  .db "ZEPHYR COMPUTER SYSTEMS LTD."
  .db $0D ; carriage return
  .db $0A ; line feed
  .db "ROM-OS v1.6.0 (c)2022 LE COSSEC Arnaud"
  .db $0D ; carriage return
  .db $0A ; line feed
- .db "32,511 BYTES FREE [Snapshot 27/06/23b]"
+ .db "32,511 BYTES FREE [Snapshot 28/06/23a]"
 READY:
  .db $0D ; carriage return
  .db $0A ; line feed
@@ -1040,56 +1110,7 @@ CharLOAD_LOOP:
  ret
 
 
-
-
 .org $2180
-;*****************THIS SUBROUTINE WORKS !!!!
-MemCheck: ; hl = start address / de = lenght of the test
- ld (hl),%11111111                                      ; fill RAM
- nop
- ld a,(hl)                              ; and check if the data is still there
- cp $FF
- jp nz,RAM_ERROR
- ld (hl),$0                             ; clear bytes checked
- inc hl
-
- dec de
- ld a,d
- cp $FF
- jr nz,MemCheck
- ld a,e
- cp $FF
- jr nz,MemCheck
-
- ret
-
-RAM_ERROR:
- ld hl,RAM_ERROR_MSG                    ; Send error message
- ld e,$09
-RAM_ERROR_1:
- ld bc, $0120
-RAM_ERROR_2:
- dec bc             ; T=6 , 1.50
- ld a,b             ; T=4 , 1.00
- cp $FF             ; T=7 , 1.75
- jr nz,RAM_ERROR_2  ; T=10 , 2.50
- ld a,c             ; T=4 , 1.00
- cp $FF             ; T=7 , 1.75
- jr nz,RAM_ERROR_2  ; T=10 , 2.50
-
- ld a,(hl)
- out (ACIA_RW | COM1),a
- 
- inc hl   
- dec e   
- ld a,e   
- cp $FF   
- jr nz,RAM_ERROR_1
- ld a,%10101010
- out (VIA_PORTB),a
- halt
-
-.org $2200
 ;*****************THIS SUBROUTINE WORKS !!!!
 Random: ; RANDOM number generator : a = final result
  ld a,r         ; Load the A register with the refresh register
@@ -1098,7 +1119,7 @@ Random: ; RANDOM number generator : a = final result
  ld a,(hl)      ; increases the randomness of the number by forming an address
  ret
 
-.org $2280
+.org $2200
 ;*****************THIS SUBROUTINE WORKS !!!!
 Delay: ; de=input value --> 14.50 µs / cycle
  dec de         ; T=6 , 1.50
@@ -1109,6 +1130,18 @@ Delay: ; de=input value --> 14.50 µs / cycle
  cp $FF         ; T=7 , 1.75
  jp nz,Delay    ; T=10 , 2.50
  ret            ; T=10 , 2.50
+
+.org $2280
+BinToDec ; this subroutine converts and prints a decimal number from binary. hl = number to convert
+ ld b, 5
+BinToDec_loop:
+ ld a,10
+ call Div8      ; hl = hl/a with remainder in a 
+ add 48         ; remainder + 48 to convert to ASCII
+ call Char_SEND ; print
+ djnz BinToDec_loop
+ ret
+
 
 .org $2300
 ;*****************THIS SUBROUTINE WORKS !!!!
@@ -1171,4 +1204,48 @@ AsciiToHex_2:
  ret
 AsciiToHex_Error:
  ld b,$1
+ ret
+
+.org $2400
+; 8-bit Multiplucation routine by ChibiAkumas
+Mul8: ; hl=hl*a
+ push bc        ; Save [bc] into the stack
+ push de        ; Save [de] into the stack  
+ ex de,hl       ; [hl] content into de
+ ld hl,$00      ; Init [hl] 
+ ld b,$08       ; Init loop index [b]
+Mul8Loop:
+ rrca           ; Rotate [a] right 1 bit into the carry flag
+ jr nc,Mul8skip ; If C=0 we don't need to add [de] to [hl]
+ add hl,de
+Mul8Skip:       
+ sla e          ; Shift [de] 1 bit to the left to double it
+ rl d
+ djnz Mul8Loop
+ pop de         ; Retrieve [de] from the stack
+ pop bc         ; Retrieve [bc] from the stack
+ ret
+
+.org $2480
+; 8-bit division routine by ChibiAkumas
+Div8: ; hl=hl/a, a=remainder
+ or a 
+ jr z,Div8DivZero ; Division by zero
+ push bc          ; Save [bc]
+ ld c,a           ; Save a into c
+ ld b,16          ; Init loop index [b] 
+ xor a            ; Init [a] to zero
+Div8Again:
+ add hl,hl        ; Shift [hl] left pushing one bit out into carry
+ rla              ; Shift [a] right with carry on the left
+ cp c             ; Test if [a] >= divider
+ jr c,Div8Skip    ; If not, skip
+ inc l            ; If yes, add 1 to [hl]
+ inc c            ; Remove [c] from [a]
+Div8Skip:
+ djnz Div8Again
+ pop bc           ; Retrieve [bc]
+ ret
+Div8DivZero:
+ ld hl,$FFFF
  ret
