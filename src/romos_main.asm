@@ -42,7 +42,9 @@
 ;                       [Snapshot_24_07_22a] : /LOAD AAAA;C Updated
 ;                       [Snapshot_09_08_22a] : /LOAD AAAA;C Updated
 ;       1.5.1 - Release candidate
-;                       [Snapshot_27_06/23a] : commenting & ACK_LOOP renamed into MAIN_LOOP                     
+;                       [Snapshot_27_06_23a] : commenting & ACK_LOOP renamed into MAIN_LOOP
+;       1.6.0 - beta
+;                       [Snapshot_27_06_23b] : Implement NMI vector
 ;*******************************************
 ; LABELS ASSIGNATION
 ;*******************************************
@@ -106,6 +108,8 @@ CURRENT_COM_CHANNEL = $FFE9
  ld hl,ACIA_RX_IRQ                      ; Initialize IRQ_VECTOR
  ld (IRQ_VECTOR),hl 
 
+ ld hl,NMI_Return                       ; Initialize NMI_VECTOR
+ ld (NMI_VECTOR),hl
 
 
  jp STARTUP                             ; Jump to startup sequence
@@ -120,7 +124,7 @@ CURRENT_COM_CHANNEL = $FFE9
  di                                     ; Disable interrupts
  EXX                                    ; Save registers
  ld hl,(IRQ_VECTOR)                     ; Load HL with the IRQ Vector (Address of the IRQ handler)
- jp (hl)                                ; Jump tp the IRQ handler
+ jp (hl)                                ; Jump to the IRQ handler
  
 
 ACIA_RX_IRQ:                            ; IRQ handler for ACIA
@@ -140,6 +144,17 @@ IRQ_Return:
  EXX                                    ; Retrieve registers
  ei                                     ; Enable interrupts back
  reti                                   ; Retrun from interrupt
+
+.org $0066 ; NMI
+ di                                     ; Disable interrupts
+ EXX                                    ; Save registers
+ ld hl,(NMI_VECTOR)                     ; Load HL with the IRQ Vector (Address of the IRQ handler)
+ jp (hl)                                ; Jump to the NMI handler
+
+NMI_Return:
+ EXX                                    ; Retrieve registers
+ ei                                     ; Enable interrupts back
+ retn                                   ; Retrun from non-maskable interrupt
 
 ;*******************************************
 ; STARTUP
@@ -881,10 +896,10 @@ MSG:
  .db "ZEPHYR COMPUTER SYSTEMS LTD."
  .db $0D ; carriage return
  .db $0A ; line feed
- .db "ROM-OS v1.5.1 (c)2022 LE COSSEC Arnaud"
+ .db "ROM-OS v1.6.0 (c)2022 LE COSSEC Arnaud"
  .db $0D ; carriage return
  .db $0A ; line feed
- .db "32,511 BYTES FREE [Snapshot 27/06/23a]"
+ .db "32,511 BYTES FREE [Snapshot 27/06/23b]"
 READY:
  .db $0D ; carriage return
  .db $0A ; line feed
