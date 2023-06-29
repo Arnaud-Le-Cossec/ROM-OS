@@ -6,9 +6,9 @@ ROM-OS is the operating system for the DX82 computer. In its current form, it of
 
 ROM-OS 1.6 - STARTUP & DIAGNOSTIC UPDATE
 
-[ ] [ADD] Cold/Warm Boots
+[x] [ADD] Cold/Warm Boots
 
-[ ] [UPDATE] RAM Count : include RAM extension
+[x] [UPDATE] RAM Count : include RAM extension
 
 ROM-OS 1.5 - Serial Update
 

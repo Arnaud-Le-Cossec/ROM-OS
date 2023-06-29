@@ -46,6 +46,7 @@
 ;       1.6.0 - beta
 ;                       [Snapshot_27_06_23b] : Implement NMI vector
 ;                       [Snapshot_28_06_23a] : Extended memory check and multiplication/division routines
+;                       [Snapshot_28_06_23b] : Cold/Warm boot implementation
 ;*******************************************
 ; LABELS ASSIGNATION
 ;*******************************************
@@ -77,7 +78,7 @@ STACK          = $FFDF
 BC_CACHE       = $FFF0
 DE_CACHE       = $FFF2
 HL_CACHE       = $FFF4
-SYS_SETTINGS_A = $FFF6
+SYS_SETTINGS_A = $FFF6  ; MSB ( [COLD/WARM BOOT] _ _ _ [CPU_SPEED3] [CPU_SPEED2] [CPU_SPEED1] [CPU_SPEED0] ) LSB
 SYS_SETTINGS_B = $FFF7
 KEYPOINTER     = $FFF8
 RX_BUFFER_COM1 = $FFFA
@@ -98,6 +99,10 @@ CURRENT_COM_CHANNEL = $FFE9
 ;*******************************************
 
 .org $0002
+ xor a                                  ; Reset SYS_SETTINGS_A for cold boot
+ ld (SYS_SETTINGS_A),a
+
+WARM_BOOT:
  di                                     ; Disable interrupts
  im 1                                   ; Set interrupt mode to 1
 
@@ -185,7 +190,9 @@ STARTUP:
 
  ld hl,$8000                            ; Perform memory verification from $8000 to $FEFF (User RAM)
  ld de,$FEFF                            ; Also clears selected RAM
- call MemCheck
+ ld a,(SYS_SETTINGS_A)                  
+ bit 7,a                                ; Check if bit 7 of SYS_SETTINGS_A is set meaning a warm boot
+ call z,MemCheck
  
  ld a,$C9                               ; Emergency RETurn at the end of USER RAM space, in case the user forgot to put one
  ld ($FEFF),a
@@ -563,7 +570,7 @@ INTERPRETER_CMD_2:                      ;   Character Selection
  jr z,CMD_RUN
  cp $27                                 ;   If sum = $27 then its a /LOAD command
  jr z,CMD_LOAD                          
- cp $7D                                 ;   If sum = $7D then its a /SAVE command (not implemented)
+ cp $7D                                 ;   If sum = $7D then its a /SAVE command
  jp z,CMD_SAVE
  cp $2D                                 ;   If sum = $2D then its a /SET1 command
  jp z,CMD_SET1
@@ -579,6 +586,8 @@ INTERPRETER_CMD_2:                      ;   Character Selection
  jp z,CMD_OUT
  cp $58                                 ;   If sum = $58 then its a /SWAP command
  jp z,CMD_BANK
+ cp $f6                                 ;   If sum = $f6 then its a /RST command
+ jp z,CMD_RST
  jp SYNTAX_ERROR                        ;   Else, its an error
 
 ; ******************************************
@@ -797,6 +806,11 @@ CMD_BANK:                               ; /BANK ( ISSUE II specific)
  out (VIA_PORTB),a                      ;   Send register a to VIA_PORTB (Bank selection)
  jp LOOP_RETURN
 
+CMD_RST:                                ; /RST - WARM RESET (RAM not erased)
+ ld hl,SYS_SETTINGS_A                   
+ set 7,(hl)                             ; set bit 7 of SYS_SETTINGS_A to indicate a warm reset
+ jp WARM_BOOT                           ; Reset to $0000
+
 ; MISCELLANEOUS ****************************
 
 PRINT_CR_LF:
@@ -969,7 +983,7 @@ STARTUP_MSG:
  .db "ROM-OS v1.6.0 (c)2022 LE COSSEC Arnaud"
  .db $0D ; carriage return
  .db $0A ; line feed
- .db "32,511 BYTES FREE [Snapshot 28/06/23a]"
+ .db "32,511 BYTES FREE [Snapshot 28/06/23b]"
 READY:
  .db $0D ; carriage return
  .db $0A ; line feed
