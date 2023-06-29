@@ -47,6 +47,8 @@
 ;                       [Snapshot_27_06_23b] : Implement NMI vector
 ;                       [Snapshot_28_06_23a] : Extended memory check and multiplication/division routines
 ;                       [Snapshot_28_06_23b] : Cold/Warm boot implementation
+;                       [Snapshot_28_06_23c] : BinToASCII (renamed BinToHex) rework : the function now prints directly the result 
+;                                            : General syntax fixes
 ;*******************************************
 ; LABELS ASSIGNATION
 ;*******************************************
@@ -373,17 +375,11 @@ MON_READ_LINE:
  ld hl,(MON_ADDR_CACHE)                 ;   Convert the most significant byte it to hexadecimal (ASCII format)
  push hl                                ;   Save reading address for later
  ld a,h
- call BinToASCII
- ld (MON_PRINT_BUFFER),de
+ call BinToHex
 
  ld hl,(MON_ADDR_CACHE)                 ;   Convert the least significant byte it to hexadecimal (ASCII format)
  ld a,l
- call BinToASCII 
- ld (MON_PRINT_BUFFER+2),de
-
- ld hl,MON_PRINT_BUFFER
- ld de,$3
- call Serial_SEND                       ;   Display the converted addresses
+ call BinToHex
 
 
 ;[DISPLAY BYTES]
@@ -394,11 +390,7 @@ MON_READ_LINE_LOOP_1:
  ld hl,(MON_ADDR_CACHE)                 ;   Load reading address
  ld a,(hl)
  
- call BinToASCII                        ;   Convert read byte to ascii
- ld (MON_PRINT_BUFFER),de
- ld hl,MON_PRINT_BUFFER                 ;   Display it
- ld de,$1
- call Serial_SEND  
+ call BinToHex                        ;   Convert read byte to ascii (hex) and print
  
  ld hl,MON_ADDR_CACHE
  call INC_16Bit_MemVal                  ; Increment reading address
@@ -765,13 +757,11 @@ CMD_IN:                                 ; /IN Command
  jp nz,SYNTAX_ERROR                     ;   ...Then send an error
  ld c,a                                 ;   Save result from register a to c
  in a,(c)                               ;   Load peripheral data at address indicated by register c in register a
- call BinToASCII                        ;   Convert read byte to ascii
- ld a," "
- ld (MON_ADDR_CACHE),a                  ;   Insert 'space'
- ld (MON_ADDR_CACHE+1),de
- ld hl,MON_ADDR_CACHE
- ld de,$2
- call Serial_SEND                       ;   Display Byte
+ push af
+ ld a,' '                               ;   print space
+ call Char_SEND
+ pop af
+ call BinToHex                        ;   Convert read byte to ascii and print it
  jp LOOP_RETURN                         ;   Go back to main loop (MAIN_LOOP)
 
 
@@ -899,8 +889,8 @@ MemCheck_loop:
  ld (hl),$0                             ; If the test passes, clear bytes checked
  inc hl                                 ; Increment [hl] to check the next address 
  ld bc,hl                               ; Save [hl] into [bc]
- sub hl,de                              ; Test if [hl] = [de]
- jr nz,MemCheck_loop:                   ; If not, continue
+ sbc hl,de                              ; Test if [hl] = [de]
+ jr nz,MemCheck_loop                   ; If not, continue
  ret                                    ; If yes, return
 
 MemCheck_RAM_Error:
@@ -983,7 +973,7 @@ STARTUP_MSG:
  .db "ROM-OS v1.6.0 (c)2022 LE COSSEC Arnaud"
  .db $0D ; carriage return
  .db $0A ; line feed
- .db "32,511 BYTES FREE [Snapshot 28/06/23b]"
+ .db "32,511 BYTES FREE [Snapshot 28/06/23c]"
 READY:
  .db $0D ; carriage return
  .db $0A ; line feed
@@ -1146,37 +1136,43 @@ Delay: ; de=input value --> 14.50 µs / cycle
  ret            ; T=10 , 2.50
 
 .org $2280
-BinToDec ; this subroutine converts and prints a decimal number from binary. hl = number to convert
- ld b, 5
+BinToDec: ; this subroutine converts and prints a decimal number from binary. hl = number to convert
+ ld b,5
 BinToDec_loop:
  ld a,10
  call Div8      ; hl = hl/a with remainder in a 
- add 48         ; remainder + 48 to convert to ASCII
- call Char_SEND ; print
+ add a,48         ; remainder + 48 to convert to ASCII
+ push af        ; push into the stack
  djnz BinToDec_loop
+ ld b,5
+BinToDec_print:
+ pop af
+ call Char_SEND
+ djnz BinToDec_print
  ret
 
 
 .org $2300
 ;*****************THIS SUBROUTINE WORKS !!!!
-BinToASCII: ; this subroutine converts a binary number into an ascii-based hex number, ready to be displayed : a=input, de = output
+BinToHex: ; this subroutine converts and prints a binary number into an ascii-based hex number, ready to be displayed : a=input
  push af
 
- call BinToASCII_Search ;-> look at the first nibble 
- ld d,(hl)
+ call BinToHex_Search ;-> look at the first nibble 
+ ld a,(hl)
+ call Char_SEND         ; Print
 
- pop af                                 ;-> look at the second nibble 
+ pop af                 ;-> look at the second nibble 
  rra            
  rra
  rra
  rra
- 
- call BinToASCII_Search
- ld e,(hl)
+ call BinToHex_Search
+ ld a,(hl)
+ call Char_SEND         ; Print
 
  ret
 
-BinToASCII_Search:
+BinToHex_Search:
  AND $0F  
  ld hl,HEX_TABLE
  add a,l
