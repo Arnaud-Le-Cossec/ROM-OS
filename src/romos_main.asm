@@ -49,6 +49,7 @@
 ;                       [Snapshot_28_06_23b] : Cold/Warm boot implementation
 ;                       [Snapshot_28_06_23c] : BinToASCII (renamed BinToHex) rework : the function now prints directly the result 
 ;                                            : General syntax fixes
+;                       [Snapshot_30_06_23a] : Optimization for CharLOAD, Shortchut 0 now takes to CMD_RST for warm reset 
 ;*******************************************
 ; LABELS ASSIGNATION
 ;*******************************************
@@ -255,7 +256,7 @@ KEY_ENTER:                              ; KEY_ENTER : Carriage Return has been e
  cp "/"                                 ;   "/" : command for command...wait, what ?
  jp z,INTERPRETER_CMD
  cp "0"                                 ;   "0" : HOME (Soft Reset)
- jp z,$0000
+ jp z,CMD_RST
  cp "#"                                 ;   "#" : shotcut for '/RUN'
  jp z,CMD_RUN
  jp SYNTAX_ERROR                        ;   If there is no match, display an error
@@ -578,7 +579,7 @@ INTERPRETER_CMD_2:                      ;   Character Selection
  jp z,CMD_OUT
  cp $58                                 ;   If sum = $58 then its a /SWAP command
  jp z,CMD_BANK
- cp $f6                                 ;   If sum = $f6 then its a /RST command
+ cp $F6                                 ;   If sum = $f6 then its a /RST command
  jp z,CMD_RST
  jp SYNTAX_ERROR                        ;   Else, its an error
 
@@ -586,7 +587,7 @@ INTERPRETER_CMD_2:                      ;   Character Selection
 ; COMMAND ROUTINES
 ; ******************************************
 
- CMD_RUN:                               ; /RUN COMMAND
+CMD_RUN:                               ; /RUN COMMAND
  ld hl,WORKING_MSG                      ;   Send "WORKING" message
  ld de,$0C
  call Serial_SEND
@@ -896,7 +897,7 @@ MemCheck_loop:
 MemCheck_RAM_Error:
  ld bc,$0009
 MemCheck_RAM_Error_loop:
- ld de,$0100
+ ld de,$0418
 MemCheck_RAM_Error_wait:
  ld hl,$0000                            ; T=10, 2.50µs@4MHz
  dec de                                 ; T=6, 1.50µs@4MHz
@@ -946,7 +947,6 @@ MemCheckExtended_msg:
 
 
 
-
 ; TEXT DATA *****************************
 WORKING_MSG:
  .db " WORKING..."
@@ -973,7 +973,7 @@ STARTUP_MSG:
  .db "ROM-OS v1.6.0 (c)2022 LE COSSEC Arnaud"
  .db $0D ; carriage return
  .db $0A ; line feed
- .db "32,511 BYTES FREE [Snapshot 28/06/23c]"
+ .db "32,511 BYTES FREE [Snapshot 30/06/23a]"
 READY:
  .db $0D ; carriage return
  .db $0A ; line feed
@@ -1101,10 +1101,10 @@ CharLOAD: ; will watch for a char to be recived
  ld a,(COM_SELECT)                      ;       Select Port ( ACIA_RST_ST | COM_SELECT )
  OR ACIA_RST_ST
  ld c,a
-CharLOAD_LOOP:
+CharLOAD_loop:
  in a,(c)
  AND %00001000                          ;       If recive flag is not 0 (data recived), Loop again
- jr z,CharLOAD
+ jr z,CharLOAD_loop
 
  ld a,(COM_SELECT)                      ;       Select Port ( ACIA_RW | COM_SELECT )
  OR ACIA_RW
