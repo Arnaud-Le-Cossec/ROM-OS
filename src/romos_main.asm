@@ -50,6 +50,8 @@
 ;                       [Snapshot_28_06_23c] : BinToASCII (renamed BinToHex) rework : the function now prints directly the result 
 ;                                            : General syntax fixes
 ;                       [Snapshot_30_06_23a] : Optimization for CharLOAD, Shortchut 0 now takes to CMD_RST for warm reset 
+;       1.7.0 - beta
+;                       [Snapshot_11_07_23a] : ZCS/BASIC implementation : interpreter 
 ;*******************************************
 ; LABELS ASSIGNATION
 ;*******************************************
@@ -67,13 +69,14 @@ ACIA_RST_ST    = %10010001  ;COM1: $99 | COM2: $95
 ACIA_CMD       = %10010010  ;COM1: $9A | COM2: $96
 ACIA_CTR       = %10010011  ;COM1: $9B | COM2: $97
  
- 
+BASIC_SYMBOLS  = $FEFF 
 RAM_AVAILABLE  = $FF00
 COM1_SETTINGS  = $FF01 
 COM2_SETTINGS  = $FF02 
 COM_SELECT     = $FF03
 COM1_DELAY     = $FF04
 COM2_DELAY     = $FF05
+BASIC_RUNNING_FLAG = $FF0F
  
 KEYBUFFER      = $FF10
 STACK          = $FFDF
@@ -93,7 +96,11 @@ IRQ_VECTOR     = $FFFE
 ; WORK RAM
 MON_ADDR_CACHE = $FFE0
 MON_LINE_CACHE = $FFE2
-MON_PRINT_BUFFER = $FFE4
+
+BASIC_START_ADDR = $FFEA
+BASIC_RUNNING_ADDR = $FFEC
+BASIC_SYMBOLS_POINTER = $FFEE
+
 PREVIOUS_COM_CHANNEL = $FFE8
 CURRENT_COM_CHANNEL = $FFE9
 
@@ -213,6 +220,9 @@ STARTUP:
 
  call MemCheckExtended                  ; Perform exetended memory check to detect RAM extensions
 
+ ld a,0                                 ; Set BASIC_RUNNING_FLAG to indicate to LOOP_RETURN that we are not running a ZCL/BASIC program (yet !)
+ ld (BASIC_RUNNING_FLAG),a
+
  ei
  jp LOOP_RETURN
 
@@ -304,6 +314,10 @@ LOOP_RETURN_1:                          ;   Clear KEYBUFFER with 0
  ld (hl),$0 
  inc hl   
  DJNZ LOOP_RETURN_1
+
+ ld a,(BASIC_RUNNING_FLAG)              ;   Check if we are running a ZCL/BASIC program, indicated by (BASIC_RUNNING_FLAG) == 1 
+ or a                                   ;   If yes, we don't return to main loop but rather RETurn from a previous CALL instruction in the BASIC execution loop
+ ret nz 
 
  ld hl,KEYBUFFER                        ;   Initialize KEYPOINTER with the start of the keybuffer
  ld (KEYPOINTER),hl
@@ -580,7 +594,11 @@ INTERPRETER_CMD_2:                      ;   Character Selection
  cp $58                                 ;   If sum = $58 then its a /SWAP command
  jp z,CMD_BANK
  cp $F6                                 ;   If sum = $f6 then its a /RST command
- jp z,CMD_RST
+ jp z,CMD_RST 
+ cp $39                                 ;   If sum = $39 then its a /GOTO command
+ jp z,CMD_GOTO                          
+ cp $D4                                 ;   If sum = $d4 then its a /BASIC command
+ jp z,CMD_BASIC
  jp SYNTAX_ERROR                        ;   Else, its an error
 
 ; ******************************************
@@ -788,7 +806,7 @@ CMD_OUT:                                ; /OUT
  jp LOOP_RETURN
 
 
-CMD_BANK:                               ; /BANK ( ISSUE II specific)
+CMD_BANK:                               ; /BANK ( ISSUE II specific )
  ld hl,KEYBUFFER+4
  call SEEK_CHAR                         ;   If keyboard buffer at hl is 'space', we search further                                 
  call AsciiToHex                        ;   Convert user input (ASCII string) into a byte
@@ -801,6 +819,90 @@ CMD_RST:                                ; /RST - WARM RESET (RAM not erased)
  ld hl,SYS_SETTINGS_A                   
  set 7,(hl)                             ; set bit 7 of SYS_SETTINGS_A to indicate a warm reset
  jp WARM_BOOT                           ; Reset to $0000
+
+CMD_GOTO:                               ; /GOTO <STRING>
+ ld hl,KEYBUFFER+4
+ call SEEK_CHAR
+ ; init scan
+ ld (HL_CACHE),hl 
+ ld de,(BASIC_START_ADDR)
+CMD_GOTO_SCAN:
+ ld a,(de)
+ cp '.'
+ jr nz, CMD_GOTO_SCAN_NEXT
+ inc de 
+ ld hl,(HL_CACHE)
+ call GOTO_TEST_MATCH
+ jr nz,CMD_GOTO_SCAN_NEXT
+ ld (BASIC_RUNNING_ADDR),hl 
+ jp LOOP_RETURN 
+CMD_GOTO_SCAN_NEXT:
+ ld a,(de)
+ or a                                   ; detect the end of the ZCL/BASIC file
+ jp z, LOOP_RETURN 
+ inc de
+ jr CMD_GOTO_SCAN
+
+GOTO_TEST_MATCH:
+ ld a,(de)
+ ld c,a 
+ ld a,(hl)
+ cp c 
+ ret nz ; return with nz flag if no match
+ cp ' '
+ ret z ; return with z flag if match success
+ inc de 
+ inc hl 
+ jr GOTO_TEST_MATCH
+
+CMD_BASIC:                              ; /BASIC
+ ld hl,BASIC_SYMBOLS                    
+ ld (BASIC_SYMBOLS_POINTER),hl          ; initialize BASIC_SYMBOLS_POINTER
+ ld hl,$8000
+ ld (BASIC_RUNNING_ADDR),hl             ; initialize BASIC_RUNNING_ADDR
+ ld a,1
+ ld (BASIC_RUNNING_FLAG),a              ; Set running flag to one, to indicate to LOOP_RETURN to NOT take us back to READY prompt (yet)
+ call ZCL_BASIC_EXEC
+ jp LOOP_RETURN 
+
+ZCL_BASIC_EXEC:
+ 
+ ; Move CMD from ram to keybuffer to be executed
+ call ZCL_BASIC_TRANSFER_CMD
+
+ ; Execute command
+ call INTERPRETER_CMD                   ; the associated RETurn is located in LOOP_RETURN
+
+ ; Run stop
+ ld a,(RX_BUFFER_COM1)
+ cp $1B ; <escape>
+ jp nz, ZCL_BASIC_EXEC
+ ld a,1
+ ld (BASIC_RUNNING_FLAG),a              ; Set running flag to zero, to indicate to LOOP_RETURN to take us back to READY prompt
+ jp LOOP_RETURN
+
+
+ZCL_BASIC_TRANSFER_CMD:
+ ; skip line number
+ ld hl,(BASIC_RUNNING_ADDR)
+ ld a,(hl)
+ cp ' ' ; <space>
+ inc hl 
+ jr nz,ZCL_BASIC_TRANSFER_CMD
+ ; init transfer
+ ld (BASIC_RUNNING_ADDR),hl 
+ ld de,KEYBUFFER+1
+ ; Move CMD from ram to keybuffer to be executed
+ZCL_BASIC_TRANSFER_CMD_LOOP:
+ ld a,(hl)
+ cp $0A ; <line feed>
+ ret z 
+ ld (de),a 
+ inc de
+ inc hl 
+ ld (BASIC_RUNNING_ADDR),hl 
+ jr ZCL_BASIC_TRANSFER_CMD_LOOP
+
 
 ; MISCELLANEOUS ****************************
 
@@ -899,10 +1001,10 @@ MemCheck_RAM_Error:
 MemCheck_RAM_Error_loop:
  ld de,$0418
 MemCheck_RAM_Error_wait:
- ld hl,$0000                            ; T=10, 2.50Âµs@4MHz
- dec de                                 ; T=6, 1.50Âµs@4MHz
- sbc hl,de                              ; T=15, 3.75Âµs@4MHz
- jr nz,MemCheck_RAM_Error_wait          ; T=7, 1.75Âµs@4MHz
+ ld hl,$0000                            ; T=10, 2.50µs@4MHz
+ dec de                                 ; T=6, 1.50µs@4MHz
+ sbc hl,de                              ; T=15, 3.75µs@4MHz
+ jr nz,MemCheck_RAM_Error_wait          ; T=7, 1.75µs@4MHz
  ld hl,(MemCheck_RAM_Error_msg+9)
  sbc hl,bc 
  ld a,(hl)
@@ -970,10 +1072,10 @@ STARTUP_MSG:
  .db "ZEPHYR COMPUTER SYSTEMS LTD."
  .db $0D ; carriage return
  .db $0A ; line feed
- .db "ROM-OS v1.6.0 (c)2022 LE COSSEC Arnaud"
+ .db "ROM-OS v1.7.0 (c)2022 LE COSSEC Arnaud"
  .db $0D ; carriage return
  .db $0A ; line feed
- .db "32,511 BYTES FREE [Snapshot 30/06/23a]"
+ .db "32,511 BYTES FREE [Snapshot 11/07/23a]"
 READY:
  .db $0D ; carriage return
  .db $0A ; line feed
@@ -1125,7 +1227,7 @@ Random: ; RANDOM number generator : a = final result
 
 .org $2200
 ;*****************THIS SUBROUTINE WORKS !!!!
-Delay: ; de=input value --> 14.50 Âµs / cycle
+Delay: ; de=input value --> 14.50 µs / cycle
  dec de         ; T=6 , 1.50
  ld a,d         ; T=4 , 1.00
  cp $FF         ; T=7 , 1.75
