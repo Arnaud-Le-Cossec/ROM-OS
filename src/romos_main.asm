@@ -1,5 +1,5 @@
 ;*******************************************
-;                ROM-OS v1.6.0 - beta
+;                ROM-OS v1.7.0 - beta
 ;         (c)2022 LE COSSEC Arnaud
 ;         lecossec.arnaud@gmail.com
 ;   Description : Operating System for the 
