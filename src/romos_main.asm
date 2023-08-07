@@ -1157,16 +1157,17 @@ BinToDec_print:
 BinToHex: ; this subroutine converts and prints a binary number into an ascii-based hex number, ready to be displayed : a=input
  push af
 
- call BinToHex_Search ;-> look at the first nibble 
- ld a,(hl)
- call Char_SEND         ; Print
-
- pop af                 ;-> look at the second nibble 
- rra            
+ rra                    ;-> look at the second nibble 
  rra
  rra
  rra
  call BinToHex_Search
+ ld a,(hl)
+ call Char_SEND         ; Print
+
+ pop af                 
+
+ call BinToHex_Search ;-> look at the first nibble 
  ld a,(hl)
  call Char_SEND         ; Print
 
@@ -1251,7 +1252,7 @@ Div8Again:
  cp c             ; Test if [a] >= divider
  jr c,Div8Skip    ; If not, skip
  inc l            ; If yes, add 1 to [hl]
- inc c            ; Remove [c] from [a]
+ sub c            ; Remove [c] from [a]
 Div8Skip:
  djnz Div8Again
  pop bc           ; Retrieve [bc]
