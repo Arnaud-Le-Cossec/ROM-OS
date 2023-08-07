@@ -1,5 +1,5 @@
 ;*******************************************
-;                ROM-OS v1.6.0 - beta
+;                ROM-OS v1.6.1 - beta
 ;         (c)2022 LE COSSEC Arnaud
 ;         lecossec.arnaud@gmail.com
 ;   Description : Operating System for the 
@@ -50,6 +50,8 @@
 ;                       [Snapshot_28_06_23c] : BinToASCII (renamed BinToHex) rework : the function now prints directly the result 
 ;                                            : General syntax fixes
 ;                       [Snapshot_30_06_23a] : Optimization for CharLOAD, Shortchut 0 now takes to CMD_RST for warm reset 
+;       1.6.1 - beta 2  
+;                       [Snapshot_29_07_23a] : 
 ;*******************************************
 ; LABELS ASSIGNATION
 ;*******************************************
@@ -74,6 +76,7 @@ COM2_SETTINGS  = $FF02
 COM_SELECT     = $FF03
 COM1_DELAY     = $FF04
 COM2_DELAY     = $FF05
+VRAM_OFFSET    = $FF0E
  
 KEYBUFFER      = $FF10
 STACK          = $FFDF
@@ -801,6 +804,170 @@ CMD_RST:                                ; /RST - WARM RESET (RAM not erased)
  ld hl,SYS_SETTINGS_A                   
  set 7,(hl)                             ; set bit 7 of SYS_SETTINGS_A to indicate a warm reset
  jp WARM_BOOT                           ; Reset to $0000
+
+
+
+; GRAPHIC ROUTINES *************************
+; These routines are to be used with the 
+; Zephyr Computer System PXP-100 videocard
+
+PXP100_COPY_BLOC_TO_VRAM:
+; This subroutines meets Zephyr Computer Systems PXP-100 videocard specifications	
+
+; This subroutine takes a VRAM bloc row (register [b]) and column (register [c]) 
+; and a bloc source address (register [de]).
+; It copies the bloc data from memory to video memory at the specified bloc index. 
+; [b] is in range 0->24 (decimal)
+; [c] is in range 0->39 (decimal)
+; [de] is in range 0->0xFFFF (hexadecimal)
+
+ push hl
+
+; Resolve target VRAM address from bloc row and column indexes
+; Address = VRAM_offset + (row*40*8) + column
+ 
+ sla b                                  ; row*8
+ sla b
+ sla b
+
+ ld h,0                                 ; row*40
+ ld l,b
+ ld a,40                                  
+ call Mul8
+
+ ld b,0                                 ; + column
+ add hl,bc 
+ 
+ ld bc,(VRAM_OFFSET)
+ add hl,bc                              ; + VRAM offset
+
+; Copy bloc to VRAM
+
+ ld b,8                                 ; Set transfer count 
+PXP100_copy_bloc_to_vram_loop:
+
+ ld a,(de)                              ; Copy data to VRAM 
+ ld (hl),a
+ 
+ inc de                                 ; Increment source address 
+ ld a,b                                 ; Increment VRAM address by 40 (= next line)
+ ld bc,40
+ add hl,bc
+ ld b,a
+ 
+ djnz PXP100_copy_bloc_to_vram_loop
+ 
+ pop hl
+
+ ret
+
+PXP100_SET_PIXEL:
+; This subroutines meets Zephyr Computer Systems PXP-100 videocard specifications
+
+; This subroutine takes x (register [de]) and y (register [hl]) pixel coordinates
+; and set a pixel at that location
+
+; x is in range 0->320
+; y is in range 0->200
+
+ push bc                                ; Preserve unused registers
+ ld c,e                                 ; Save x lower byte ([e]) to [c]
+
+; Resolve target VRAM address
+
+call PXP100_RESOLVE_ADDRESS             ; hl = VRAM address 
+
+; Set pixel
+ ld a,c                                 ; we isolate the first 3 bits of register e (x coordinate) as they point to the bit number within the cell
+ and %00000111
+ ld b,a
+ ld a,$1
+PXP100_set_pixel_loop:
+ rrca
+ djnz PXP100_set_pixel_loop
+ or (hl)                                ; write to VRAM
+ pop bc
+ ret
+
+PXP100_RESET_PIXEL:
+; This subroutines meets Zephyr Computer Systems PXP-100 videocard specifications
+
+; This subroutine takes x (register [de]) and y (register [hl]) pixel coordinates
+; and reset a pixel at that location
+
+; x is in range 0->320
+; y is in range 0->200
+
+ push bc                                ; Preserve unused registers
+ ld c,e                                 ; Save x lower byte ([e]) to [c]
+
+; Resolve target VRAM address
+
+call PXP100_RESOLVE_ADDRESS             ; hl = VRAM address 
+
+; Set pixel
+ ld a,c                                 ; we isolate the first 3 bits of register e (x coordinate) as they point to the bit number within the cell
+ and %00000111
+ ld b,a
+ ld a,%11111110
+PXP100_reset_pixel_loop:
+ rrca
+ djnz PXP100_reset_pixel_loop
+ and (hl)                                ; write to VRAM
+ pop bc
+ ret
+
+PXP100_TOGGLE_PIXEL:
+; This subroutines meets Zephyr Computer Systems PXP-100 videocard specifications
+
+; This subroutine takes x (register [de]) and y (register [hl]) pixel coordinates
+; and toggles a pixel at that location
+
+; x is in range 0->320
+; y is in range 0->200
+
+ push bc                                ; Preserve unused registers
+ ld c,e                                 ; Save x lower byte ([e]) to [c]
+
+; Resolve target VRAM address
+
+call PXP100_RESOLVE_ADDRESS             ; hl = VRAM address 
+
+; Set pixel
+ ld a,c                                 ; we isolate the first 3 bits of register e (x coordinate) as they point to the bit number within the cell
+ and %00000111
+ ld b,a
+ ld a,1
+PXP100_toggle_pixel_loop:
+ rrca
+ djnz PXP100_toggle_pixel_loop
+ xor (hl)                                ; write to VRAM
+ pop bc
+ ret
+
+PXP100_RESOLVE_ADDRESS:
+; This subroutines meets Zephyr Computer Systems PXP-100 videocard specifications
+
+; This subroutine takes x (register [de]) and y (register [hl]) pixel coordinates
+; And outputs the corresponding VRAM address
+
+; Address = VRAM_offset + (y*40) + (x/8)
+
+ ld a,40
+ call Mul8 		                        ; (y*COLUMN_COUNT) or ([hl]*40)
+
+ srl d 			                        ; shift [bc] 3 times ( = divide by 8)
+ rr e
+ srl d
+ rr e
+ srl d
+ rr e
+
+ add hl,de                              ; + (x/8)
+ ld de,(VRAM_OFFSET)                    ; + VRAM offset
+ add hl,de
+
+ ret
 
 ; MISCELLANEOUS ****************************
 
