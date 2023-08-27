@@ -50,6 +50,7 @@
 ;                       [Snapshot_28_06_23c] : BinToASCII (renamed BinToHex) rework : the function now prints directly the result 
 ;                                            : General syntax fixes
 ;                       [Snapshot_30_06_23a] : Optimization for CharLOAD, Shortchut 0 now takes to CMD_RST for warm reset 
+;                       [Snapshot_27_08_23a] : BinToASCII fix
 ;*******************************************
 ; LABELS ASSIGNATION
 ;*******************************************
@@ -915,6 +916,7 @@ MemCheck_RAM_Error_msg:
 
 MemCheckExtended:
  ld b,1                                 ;   Init [b] with the first bank index 
+ ld d,0
  ld c,VIA_PORTB                         ;   Init [c] with VIA_PORTB IO address
  ld hl,$4000                            ;   In this test, we only check the banks' first byte at $4000
 MemCheckExtended_loop:
@@ -970,10 +972,10 @@ STARTUP_MSG:
  .db "ZEPHYR COMPUTER SYSTEMS LTD."
  .db $0D ; carriage return
  .db $0A ; line feed
- .db "ROM-OS v1.6.0 (c)2022 LE COSSEC Arnaud"
+ .db "ROM-OS v1.6.0 (c)2023 LE COSSEC Arnaud"
  .db $0D ; carriage return
  .db $0A ; line feed
- .db "32,511 BYTES FREE [Snapshot 30/06/23a]"
+ .db "32,511 BYTES FREE [Snapshot 27/08/23a]"
 READY:
  .db $0D ; carriage return
  .db $0A ; line feed
@@ -1137,14 +1139,15 @@ Delay: ; de=input value --> 14.50 µs / cycle
 
 .org $2280
 BinToDec: ; this subroutine converts and prints a decimal number from binary. hl = number to convert
- ld b,5
 BinToDec_loop:
  ld a,10
  call Div8      ; hl = hl/a with remainder in a 
  add a,48         ; remainder + 48 to convert to ASCII
  push af        ; push into the stack
- djnz BinToDec_loop
- ld b,5
+ inc b
+ ld a,l
+ or a
+ jr nz,BinToDec_loop
 BinToDec_print:
  pop af
  call Char_SEND
