@@ -51,6 +51,7 @@
 ;                                            : General syntax fixes
 ;                       [Snapshot_30_06_23a] : Optimization for CharLOAD, Shortchut 0 now takes to CMD_RST for warm reset 
 ;                       [Snapshot_27_08_23a] : BinToASCII fix
+;                       [Snapshot_12_09_23a] : Change 'AsciiToHex' name to 'HexToBin' to fit new naming convention
 ;*******************************************
 ; LABELS ASSIGNATION
 ;*******************************************
@@ -443,7 +444,7 @@ MON_WRITE_2:                            ;   Writing sequence loop
  jp nz,LOOP_RETURN
  
  inc hl                                 ;   But if so, it means that a new byte has to be written
- call AsciiToHex                        ;   Convert user input (ASCII string) into a byte
+ call HexToBin                          ;   Convert user input (ASCII string) into a byte
  bit 0,b                                ;   If Error(b)=1, ...
  jp nz,SYNTAX_ERROR                     ;   ...Then send an error
 
@@ -724,8 +725,8 @@ CMD_SAVE_END_LOOP:
 CMD_SET:                                ; /SET1 & /SET2 Commands
  ld hl,KEYBUFFER+4
  call SEEK_CHAR                         ;   If keyboard buffer at hl is 'space', we search further                                 
- call AsciiToHex                        ;   Convert user input (ASCII string) into a byte
- bit 0,b                                ;   Error status of AsciiToHex is held into register b - so we tranfer it to a for testing
+ call HexToBin                          ;   Convert user input (ASCII string) into a byte
+ bit 0,b                                ;   Error status of HexToBin is held into register b - so we tranfer it to a for testing
  jp nz,SYNTAX_ERROR                     ;   ...Then send an error
  ret
 
@@ -754,8 +755,8 @@ CMD_COM2:                               ; /COM2
 CMD_IN:                                 ; /IN Command
  ld hl,KEYBUFFER+2
  call SEEK_CHAR                         ;   If keyboard buffer at hl is 'space', we search further                                 
- call AsciiToHex                        ;   Convert user input (ASCII string) into a byte
- bit 0,b                                ;   Error status of AsciiToHex is held into register b - so we tranfer it to a for testing
+ call HexToBin                          ;   Convert user input (ASCII string) into a byte
+ bit 0,b                                ;   Error status of HexToBin is held into register b - so we tranfer it to a for testing
  jp nz,SYNTAX_ERROR                     ;   ...Then send an error
  ld c,a                                 ;   Save result from register a to c
  in a,(c)                               ;   Load peripheral data at address indicated by register c in register a
@@ -763,7 +764,7 @@ CMD_IN:                                 ; /IN Command
  ld a,' '                               ;   print space
  call Char_SEND
  pop af
- call BinToHex                        ;   Convert read byte to ascii and print it
+ call BinToHex                          ;   Convert read byte to ascii and print it
  jp LOOP_RETURN                         ;   Go back to main loop (MAIN_LOOP)
 
 
@@ -771,16 +772,16 @@ CMD_OUT:                                ; /OUT
  ld hl,KEYBUFFER+3
 
  call SEEK_CHAR                         ;   If keyboard buffer at hl is 'space', we search further                                
- call AsciiToHex
+ call HexToBin
  ld e,a                                 ;   Save result from register a to e
- bit 0,b                                ;   Error status of AsciiToHex is held into register b - so we tranfer it to a for testing
+ bit 0,b                                ;   Error status of HexToBin is held into register b - so we tranfer it to a for testing
  jp nz,SYNTAX_ERROR                     ;   ...Then send an error
 
  call SEEK_CHAR                         ;   If keyboard buffer at hl is 'space', we search further                       
  cp ";"                                 ;   Else if keyboard buffer at hl is different than ';', go back to main loop (MAIN_LOOP)
  jp nz,SYNTAX_ERROR
  inc hl                                 ;   But if so, it means that a new byte has to be written
- call AsciiToHex                        ;   Convert user input (ASCII string) into a byte
+ call HexToBin                          ;   Convert user input (ASCII string) into a byte
  bit 0,b                                ;   If Error(b)=1, ...
  jp nz,SYNTAX_ERROR                     ;   ...Then send an error
  
@@ -792,8 +793,8 @@ CMD_OUT:                                ; /OUT
 CMD_BANK:                               ; /BANK ( ISSUE II specific)
  ld hl,KEYBUFFER+4
  call SEEK_CHAR                         ;   If keyboard buffer at hl is 'space', we search further                                 
- call AsciiToHex                        ;   Convert user input (ASCII string) into a byte
- bit 0,b                                ;   Error status of AsciiToHex is held into register b - so we tranfer it to a for testing
+ call HexToBin                          ;   Convert user input (ASCII string) into a byte
+ bit 0,b                                ;   Error status of HexToBin is held into register b - so we tranfer it to a for testing
  jp nz,SYNTAX_ERROR                     ;   ...Then send an error
  out (VIA_PORTB),a                      ;   Send register a to VIA_PORTB (Bank selection)
  jp LOOP_RETURN
@@ -863,12 +864,12 @@ Interpreter_ADDR:                       ; Interpreter_ADDR  de = address output 
  jr z,Interpreter_ADDR                  ;   Then loop again until we hit a character
  cp $0                                  ;   Otherwise if character = 0; send error
  jr z,Interpreter_ADDR_Error
- call AsciiToHex                        ;   Convert the most significant Byte from ascii to 'regular' binary
+ call HexToBin                          ;   Convert the most significant Byte from ascii to 'regular' binary
  bit 0,b                                ;   If b = 1, Send an error
  jr nz,Interpreter_ADDR_Error
  ld d,a                                 ;   Output
  inc hl                                 ;   Otherwise we continue
- call AsciiToHex                        ;   Convert the least significant Byte from ascii to 'regular' binary
+ call HexToBin                          ;   Convert the least significant Byte from ascii to 'regular' binary
  bit 0,b                                ;   If b = 1, Send an error
  jr nz,Interpreter_ADDR_Error
  ld e,a                                 ;   Output
@@ -975,7 +976,7 @@ STARTUP_MSG:
  .db "ROM-OS v1.6.0 (c)2023 LE COSSEC Arnaud"
  .db $0D ; carriage return
  .db $0A ; line feed
- .db "32,511 BYTES FREE [Snapshot 27/08/23a]"
+ .db "32,511 BYTES FREE [Snapshot 12/09/23a]"
 READY:
  .db $0D ; carriage return
  .db $0A ; line feed
@@ -1188,35 +1189,35 @@ HEX_TABLE:
 
 .org $2380
 ;*****************THIS SUBROUTINE WORKS !!!!
-AsciiToHex: ; hl = addr of the first char to convert (two of them) ; a = final result ; b = 1 if error ocured
+HexToBin: ; hl = addr of the first char to convert (two of them) ; a = final result ; b = 1 if error ocured
  ld b,$0
- call AsciiToHex_1
+ call HexToBin_1
  rlca
  rlca
  rlca
  rlca
  ld c,a 
  inc hl
- call AsciiToHex_1
+ call HexToBin_1
  OR c
  ret
-AsciiToHex_1:
+HexToBin_1:
  ld a,(hl)
  cp $30
- jr c,AsciiToHex_Error
+ jr c,HexToBin_Error
  cp $3A
- jr nc,AsciiToHex_2
+ jr nc,HexToBin_2
  sub $30
  ret
-AsciiToHex_2:
+HexToBin_2:
  AND %11011111
  cp $41
- jr c,AsciiToHex_Error
+ jr c,HexToBin_Error
  cp $47
- jr nc,AsciiToHex_Error
+ jr nc,HexToBin_Error
  sub $37
  ret
-AsciiToHex_Error:
+HexToBin_Error:
  ld b,$1
  ret
 
