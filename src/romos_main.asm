@@ -52,6 +52,7 @@
 ;                       [Snapshot_30_06_23a] : Optimization for CharLOAD, Shortchut 0 now takes to CMD_RST for warm reset 
 ;                       [Snapshot_27_08_23a] : BinToASCII fix
 ;                       [Snapshot_12_09_23a] : Change 'AsciiToHex' name to 'HexToBin' to fit new naming convention
+;                       [Snapshot_12_09_23b] : Command getters
 ;*******************************************
 ; LABELS ASSIGNATION
 ;*******************************************
@@ -599,9 +600,11 @@ CMD_RUN:                               ; /RUN COMMAND
 
 CMD_LOAD:                               ; /LOAD AAAA;C COMMAND
  ld hl,KEYBUFFER+4
- call Interpreter_ADDR
- cp $1
- jp z,SYNTAX_ERROR
+
+ call GET_ARGUMENT_SINGLE_16
+ bit 0,b
+ jp nz,SYNTAX_ERROR
+
  ld (MON_ADDR_CACHE),de                 ;   Save New address
 
  call SEEK_CHAR                         ;   If keyboard buffer at hl is 'space', we search further
@@ -669,18 +672,20 @@ CMD_LOAD_ERROR:                         ;   CMD_LOAD_ERROR
  
 CMD_SAVE:                               ; /SAVE AAAA,BBBB,C      (AAAA: Start Address, BBBB: End Address, C: COM Channel)
  ld hl,KEYBUFFER+4
- call Interpreter_ADDR
- cp $1
- jp z,SYNTAX_ERROR
+
+ call GET_ARGUMENT_SINGLE_16
+ bit 0,b
+ jp nz,SYNTAX_ERROR
+
  ld (MON_ADDR_CACHE),de                 ;   Save New address
  
  call SEEK_CHAR                         ;   If keyboard buffer at hl is 'space', we search further
  cp ","                                 ;   Else if keyboard buffer at hl is different than ',', display error
  jp nz,SYNTAX_ERROR                     
 
- call Interpreter_ADDR
- cp $1
- jp z,SYNTAX_ERROR
+ call GET_ARGUMENT_SINGLE_16
+ bit 0,b
+ jp nz,SYNTAX_ERROR
  ld (MON_ADDR_CACHE+2),de               ;   Save End address
 
  call SEEK_CHAR                         ;   If keyboard buffer at hl is 'space', we search further
@@ -720,9 +725,9 @@ CMD_SAVE_END_LOOP:
  
  jp LOOP_RETURN
 
+;[Deprecated - will be removed in the next update]{
 
-
-CMD_SET:                                ; /SET1 & /SET2 Commands
+CMD_SET:                                ;  /SET1 & /SET2 Commands
  ld hl,KEYBUFFER+4
  call SEEK_CHAR                         ;   If keyboard buffer at hl is 'space', we search further                                 
  call HexToBin                          ;   Convert user input (ASCII string) into a byte
@@ -742,6 +747,8 @@ CMD_SET2:
  ld (COM2_Settings),a
  jp LOOP_RETURN
 
+;}
+
 CMD_COM1:                               ; /COM1
  ld a,COM1                              ; Make COM1 the default channel
  ld (COM_SELECT),a
@@ -752,13 +759,13 @@ CMD_COM2:                               ; /COM2
  ld (COM_SELECT),a
  jp LOOP_RETURN
 
-CMD_IN:                                 ; /IN Command
+CMD_IN:                                 ; /IN AA
  ld hl,KEYBUFFER+2
- call SEEK_CHAR                         ;   If keyboard buffer at hl is 'space', we search further                                 
- call HexToBin                          ;   Convert user input (ASCII string) into a byte
- bit 0,b                                ;   Error status of HexToBin is held into register b - so we tranfer it to a for testing
- jp nz,SYNTAX_ERROR                     ;   ...Then send an error
- ld c,a                                 ;   Save result from register a to c
+ call GET_ARGUMENT_SINGLE_8             ;   Get port number as an 8-bit wide argument. Result in [a]
+ bit 0,b                                ;   Error held in register [b]
+ jp nz,SYNTAX_ERROR
+
+ ld c,a                                 ;   Save result from register [a] to [c]
  in a,(c)                               ;   Load peripheral data at address indicated by register c in register a
  push af
  ld a,' '                               ;   print space
@@ -768,33 +775,33 @@ CMD_IN:                                 ; /IN Command
  jp LOOP_RETURN                         ;   Go back to main loop (MAIN_LOOP)
 
 
-CMD_OUT:                                ; /OUT
+CMD_OUT:                                ; /OUT PP;AA
  ld hl,KEYBUFFER+3
 
- call SEEK_CHAR                         ;   If keyboard buffer at hl is 'space', we search further                                
- call HexToBin
- ld e,a                                 ;   Save result from register a to e
- bit 0,b                                ;   Error status of HexToBin is held into register b - so we tranfer it to a for testing
- jp nz,SYNTAX_ERROR                     ;   ...Then send an error
+ call GET_ARGUMENT_SINGLE_8             ;   Get port number as an 8-bit wide argument. Result in [a]
+ bit 0,b                                ;   Error held in register [b]
+ jp nz,SYNTAX_ERROR
+ push af
 
  call SEEK_CHAR                         ;   If keyboard buffer at hl is 'space', we search further                       
  cp ";"                                 ;   Else if keyboard buffer at hl is different than ';', go back to main loop (MAIN_LOOP)
  jp nz,SYNTAX_ERROR
- inc hl                                 ;   But if so, it means that a new byte has to be written
- call HexToBin                          ;   Convert user input (ASCII string) into a byte
- bit 0,b                                ;   If Error(b)=1, ...
- jp nz,SYNTAX_ERROR                     ;   ...Then send an error
  
- ld c,e
+ call GET_ARGUMENT_SINGLE_8             ;   Get port number as an 8-bit wide argument. Result in [a]
+ bit 0,b                                ;   Error held in register [b]
+ jp nz,SYNTAX_ERROR
+ 
+ pop bc                                 ;   Retrieve port from stack into b
+ ld c,b
+
  out (c),a
  jp LOOP_RETURN
 
 
-CMD_BANK:                               ; /BANK ( ISSUE II specific)
+CMD_BANK:                               ; /BANK AA ( ISSUE II specific)
  ld hl,KEYBUFFER+4
- call SEEK_CHAR                         ;   If keyboard buffer at hl is 'space', we search further                                 
- call HexToBin                          ;   Convert user input (ASCII string) into a byte
- bit 0,b                                ;   Error status of HexToBin is held into register b - so we tranfer it to a for testing
+ call GET_ARGUMENT_SINGLE_8             ;   Get port number as an 8-bit wide argument. Result in [a]                                
+ bit 0,b                                ;   Error held in register [b]
  jp nz,SYNTAX_ERROR                     ;   ...Then send an error
  out (VIA_PORTB),a                      ;   Send register a to VIA_PORTB (Bank selection)
  jp LOOP_RETURN
@@ -803,6 +810,31 @@ CMD_RST:                                ; /RST - WARM RESET (RAM not erased)
  ld hl,SYS_SETTINGS_A                   
  set 7,(hl)                             ; set bit 7 of SYS_SETTINGS_A to indicate a warm reset
  jp WARM_BOOT                           ; Reset to $0000
+
+; COMMAND PIPLINE GETTERS ******************
+
+GET_ARGUMENT_SINGLE_8:
+ ; Get a single 8-bit wide argument from the keyboard buffer
+ ; [hl] = keybuffer index
+ ; [b] = error
+ ; [a] = output
+ CALL SEEK_CHAR                         ; Skip 'spaces' in the key buffer
+ CALL HexToBin                          ; Convert value written in ascii hex into binary
+ ret                                    ; return
+
+GET_ARGUMENT_SINGLE_16:
+ ; Get a single 16-bit wide argument from the keyboard buffer
+ ; [hl] = keybuffer index
+ ; [b] = error
+ ; [de] = output
+ CALL SEEK_CHAR                         ; Skip 'spaces' in the key buffer
+ CALL HexToBin                          ; Convert the most significant byte written in ascii hex into binary
+ ld d,a                                 ; Store result into [d]
+ inc hl                                 ; Increment keybuffer index
+ CALL HexToBin                          ; Convert the least significant byte written in ascii hex into binary
+ ld e,a                                 ; Store result into [e]
+ ret                                    ; return
+
 
 ; MISCELLANEOUS ****************************
 
