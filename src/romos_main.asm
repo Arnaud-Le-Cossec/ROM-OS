@@ -53,6 +53,13 @@
 ;                       [Snapshot_27_08_23a] : BinToASCII fix
 ;                       [Snapshot_12_09_23a] : Change 'AsciiToHex' name to 'HexToBin' to fit new naming convention
 ;                       [Snapshot_12_09_23b] : Command getters
+;                       [Snapshot_22_10_23a] : /PRINT AAAA implemented
+;                                            : /PEEK AAAA implemented
+;                                            : /POKE AAAA;BB implemented
+;                                            : /POP implemented
+;                                            : /PUSH AAAA implemented
+;                                            : /CLEAR implemented
+;                                            : /SET1 & SET2 removed
 ;*******************************************
 ; LABELS ASSIGNATION
 ;*******************************************
@@ -562,28 +569,36 @@ INTERPRETER_CMD_1:                      ;   Associate the letters of the command
 
 INTERPRETER_CMD_2:                      ;   Character Selection
  ld a,c                                 ;   Load the sum from register c
- cp $F2                                 ;   If sum = $F2 then its a /RUN command
+ cp $F2                                 ;   If sum = $F2 then it's a /RUN command
  jr z,CMD_RUN
- cp $27                                 ;   If sum = $27 then its a /LOAD command
+ cp $27                                 ;   If sum = $27 then it's a /LOAD command
  jr z,CMD_LOAD                          
- cp $7D                                 ;   If sum = $7D then its a /SAVE command
+ cp $7D                                 ;   If sum = $7D then it's a /SAVE command
  jp z,CMD_SAVE
- cp $2D                                 ;   If sum = $2D then its a /SET1 command
- jp z,CMD_SET1
- cp $2F                                 ;   If sum = $2F then its a /SET2 command
- jp z,CMD_SET1
- cp $60                                 ;   If sum = $60 then its a /COM1 command
+ cp $60                                 ;   If sum = $60 then it's a /COM1 command
  jp z,CMD_COM1
- cp $62                                 ;   If sum = $62 then its a /COM2 command
+ cp $62                                 ;   If sum = $62 then it's a /COM2 command
  jp z,CMD_COM1
- cp $3A                                 ;   If sum = $3A then its a /IN command
+ cp $3A                                 ;   If sum = $3A then it's a /IN command
  jp z,CMD_IN
- cp $E6                                 ;   If sum = $E6 then its a /OUT command
+ cp $E6                                 ;   If sum = $E6 then it's a /OUT command
  jp z,CMD_OUT
- cp $58                                 ;   If sum = $58 then its a /SWAP command
+ cp $58                                 ;   If sum = $58 then it's a /SWAP command
  jp z,CMD_BANK
- cp $F6                                 ;   If sum = $f6 then its a /RST command
+ cp $F6                                 ;   If sum = $f6 then it's a /RST command
  jp z,CMD_RST
+ cp $8D                                 ;   If sum = $8D then it's a /PRINT command
+ jp z,CMD_PRINT
+ cp $35                                 ;   If sum = $35 then it's a /PEEK command
+ jp z,CMD_PEEK
+ cp $91                                 ;   If sum = $91 then it's a /POKE command
+ jp z,CMD_POKE
+ cp $E7                                 ;   If sum = $E7 then it's a /PUSH command
+ jp z,CMD_PUSH
+ cp $CE                                 ;   If sum = $CE then it's a /POP command
+ jp z,CMD_POP 
+ cp $33                                 ;   If sum = $33 then it's a /CLEAR command
+ jp z,CMD_CLEAR
  jp SYNTAX_ERROR                        ;   Else, its an error
 
 ; ******************************************
@@ -725,30 +740,6 @@ CMD_SAVE_END_LOOP:
  
  jp LOOP_RETURN
 
-;[Deprecated - will be removed in the next update]{
-
-CMD_SET:                                ;  /SET1 & /SET2 Commands
- ld hl,KEYBUFFER+4
- call SEEK_CHAR                         ;   If keyboard buffer at hl is 'space', we search further                                 
- call HexToBin                          ;   Convert user input (ASCII string) into a byte
- bit 0,b                                ;   Error status of HexToBin is held into register b - so we tranfer it to a for testing
- jp nz,SYNTAX_ERROR                     ;   ...Then send an error
- ret
-
-CMD_SET1:
- call CMD_SET
- out (ACIA_CTR | COM1),a
- ld (COM1_Settings),a
- jp LOOP_RETURN
-
-CMD_SET2:
- call CMD_SET
- out (ACIA_CTR | COM2),a
- ld (COM2_Settings),a
- jp LOOP_RETURN
-
-;}
-
 CMD_COM1:                               ; /COM1
  ld a,COM1                              ; Make COM1 the default channel
  ld (COM_SELECT),a
@@ -810,6 +801,79 @@ CMD_RST:                                ; /RST - WARM RESET (RAM not erased)
  ld hl,SYS_SETTINGS_A                   
  set 7,(hl)                             ; set bit 7 of SYS_SETTINGS_A to indicate a warm reset
  jp WARM_BOOT                           ; Reset to $0000
+
+CMD_PRINT:                              ; /PRINT AAAA - Print null-terminated string at address AAAA
+ ld hl,KEYBUFFER+5
+ call GET_ARGUMENT_SINGLE_16            ;    Get string address
+ bit 0,b
+ jp nz,SYNTAX_ERROR
+CMD_PRINT_LOOP:
+ ld a,(de)                              ;    load character from string address
+ or a                                   ;    update flags
+ jp z,LOOP_RETURN                       ;    return if null character
+ call Char_SEND                         ;    else print character to terminal
+ inc de                                 ;    next character
+ jr CMD_PRINT_LOOP
+
+CMD_PEEK:                               ; /PEEK AAAA - return content from memory address AAAA
+ ld hl,KEYBUFFER+4
+ call GET_ARGUMENT_SINGLE_16            ;    Get memory address
+ bit 0,b
+ jp nz,SYNTAX_ERROR
+
+ ld a,' '                               ;   print space
+ call Char_SEND
+
+ ld a,(de)
+ call BinToHex                          ;   Convert read byte to ascii and print it
+ jp LOOP_RETURN
+
+CMD_POKE:                               ; /POKE AAAA;BB - write BB into memory address AAAA
+ ld hl,KEYBUFFER+4
+ call GET_ARGUMENT_SINGLE_16            ;    Get memory address
+ bit 0,b
+ jp nz,SYNTAX_ERROR
+ push de
+
+ call SEEK_CHAR                         ;   If keyboard buffer at hl is 'space', we search further                       
+ cp ";"                                 ;   Else if keyboard buffer at hl is different than ';', go back to main loop (MAIN_LOOP)
+ jp nz,SYNTAX_ERROR
+
+ call GET_ARGUMENT_SINGLE_8             ;   Get port number as an 8-bit wide argument. Result in [a]
+ bit 0,b                                ;   Error held in register [b]
+ jp nz,SYNTAX_ERROR
+
+ pop de
+ ld a,(de)
+ jp LOOP_RETURN
+
+CMD_PUSH:                               ; /PUSH AAAA - push value AAAA into the stack
+ ld hl,KEYBUFFER+4
+ call GET_ARGUMENT_SINGLE_16            ;    Get memory address
+ bit 0,b
+ jp nz,SYNTAX_ERROR
+ push de
+ jp LOOP_RETURN
+
+CMD_POP:                                ; /POP - pop value from the stack
+ ld a,' '                               ;   print space
+ call Char_SEND
+
+ pop hl                                 ;   Convert the most significant byte it to hexadecimal (ASCII format)
+ push hl                                ;   Save reading address for later
+ ld a,h
+ call BinToHex
+
+ pop hl                                 ;   Convert the least significant byte it to hexadecimal (ASCII format)
+ ld a,l
+ call BinToHex
+ jp LOOP_RETURN
+
+CMD_CLEAR:
+ ld b,30
+ call PRINT_CR_LF
+ djnz CMD_CLEAR
+ jp LOOP_RETURN
 
 ; COMMAND PIPLINE GETTERS ******************
 
@@ -1008,7 +1072,7 @@ STARTUP_MSG:
  .db "ROM-OS v1.6.0 (c)2023 LE COSSEC Arnaud"
  .db $0D ; carriage return
  .db $0A ; line feed
- .db "32,511 BYTES FREE [Snapshot 12/09/23a]"
+ .db "32,511 BYTES FREE [Snapshot 22/10/23a]"
 READY:
  .db $0D ; carriage return
  .db $0A ; line feed
