@@ -60,6 +60,7 @@
 ;                                            : /PUSH AAAA implemented
 ;                                            : /CLEAR implemented
 ;                                            : /SET1 & SET2 removed
+;                       [Snapshot_26_10_23a] : Special expression '"' : Return local string address
 ;*******************************************
 ; LABELS ASSIGNATION
 ;*******************************************
@@ -811,6 +812,8 @@ CMD_PRINT_LOOP:
  ld a,(de)                              ;    load character from string address
  or a                                   ;    update flags
  jp z,LOOP_RETURN                       ;    return if null character
+ cp $22 ; "
+ jp z,LOOP_RETURN                       ;    return if " character
  call Char_SEND                         ;    else print character to terminal
  inc de                                 ;    next character
  jr CMD_PRINT_LOOP
@@ -844,7 +847,7 @@ CMD_POKE:                               ; /POKE AAAA;BB - write BB into memory a
  jp nz,SYNTAX_ERROR
 
  pop de
- ld a,(de)
+ ld (de),a
  jp LOOP_RETURN
 
 CMD_PUSH:                               ; /PUSH AAAA - push value AAAA into the stack
@@ -871,8 +874,9 @@ CMD_POP:                                ; /POP - pop value from the stack
 
 CMD_CLEAR:
  ld b,30
+CMD_CLEAR_LOOP:
  call PRINT_CR_LF
- djnz CMD_CLEAR
+ djnz CMD_CLEAR_LOOP
  jp LOOP_RETURN
 
 ; COMMAND PIPLINE GETTERS ******************
@@ -883,8 +887,10 @@ GET_ARGUMENT_SINGLE_8:
  ; [b] = error
  ; [a] = output
  CALL SEEK_CHAR                         ; Skip 'spaces' in the key buffer
+ ; regular expression
  CALL HexToBin                          ; Convert value written in ascii hex into binary
  ret                                    ; return
+
 
 GET_ARGUMENT_SINGLE_16:
  ; Get a single 16-bit wide argument from the keyboard buffer
@@ -892,6 +898,11 @@ GET_ARGUMENT_SINGLE_16:
  ; [b] = error
  ; [de] = output
  CALL SEEK_CHAR                         ; Skip 'spaces' in the key buffer
+ ; check special expressions
+ ld a,(hl)                              ; Look at the first argument character
+ cp $22                                 ; Special expression '"' : local string address
+ jr z,GET_ARGUMENT_SINGLE_16_STRING
+ ; regular expression
  CALL HexToBin                          ; Convert the most significant byte written in ascii hex into binary
  ld d,a                                 ; Store result into [d]
  inc hl                                 ; Increment keybuffer index
@@ -899,6 +910,9 @@ GET_ARGUMENT_SINGLE_16:
  ld e,a                                 ; Store result into [e]
  ret                                    ; return
 
+GET_ARGUMENT_SINGLE_16_STRING:
+ ld de,hl
+ ret
 
 ; MISCELLANEOUS ****************************
 
@@ -1072,7 +1086,7 @@ STARTUP_MSG:
  .db "ROM-OS v1.6.0 (c)2023 LE COSSEC Arnaud"
  .db $0D ; carriage return
  .db $0A ; line feed
- .db "32,511 BYTES FREE [Snapshot 22/10/23a]"
+ .db "32,511 BYTES FREE [Snapshot 26/10/23a]"
 READY:
  .db $0D ; carriage return
  .db $0A ; line feed
