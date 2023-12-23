@@ -61,6 +61,10 @@
 ;                                            : /CLEAR implemented
 ;                                            : /SET1 & SET2 removed
 ;                       [Snapshot_26_10_23a] : Special expression '"' : Return local string address
+;                       [Snapshot_21_12_23a] : Variables implemented -> $A returns the value of A and %A returns its address 
+;                                            : /PUSH and /POP commands removed as they are proved dangerous
+;                                            : /SET AAAA;BBBB & /GET AAAA implemented - they are 16bit versions of POKE and PEEK to manipulate variables
+;                                            : Command output setters
 ;*******************************************
 ; LABELS ASSIGNATION
 ;*******************************************
@@ -85,6 +89,8 @@ COM2_SETTINGS  = $FF02
 COM_SELECT     = $FF03
 COM1_DELAY     = $FF04
 COM2_DELAY     = $FF05
+
+VAR_MAP        = $FF0E       ; Variable table address
  
 KEYBUFFER      = $FF10
 STACK          = $FFDF
@@ -209,7 +215,10 @@ STARTUP:
  call z,MemCheck
  
  ld a,$C9                               ; Emergency RETurn at the end of USER RAM space, in case the user forgot to put one
- ld ($FEFF),a
+ ld ($FE7F),a
+
+ ld hl,$FEFF                            ; Set VARMAP - this register tells the system where to store the user variables
+ ld (VAR_MAP),hl
 
  ld a,$00                               ; Clear serial input buffers
  ld (RX_BUFFER_COM1),a
@@ -570,36 +579,37 @@ INTERPRETER_CMD_1:                      ;   Associate the letters of the command
 
 INTERPRETER_CMD_2:                      ;   Character Selection
  ld a,c                                 ;   Load the sum from register c
- cp $F2                                 ;   If sum = $F2 then it's a /RUN command
+ cp $F2                                 ;   If sum = $F2 then it is a /RUN command
  jr z,CMD_RUN
- cp $27                                 ;   If sum = $27 then it's a /LOAD command
+ cp $27                                 ;   If sum = $27 then it is a /LOAD command
  jr z,CMD_LOAD                          
- cp $7D                                 ;   If sum = $7D then it's a /SAVE command
+ cp $7D                                 ;   If sum = $7D then it is a /SAVE command
  jp z,CMD_SAVE
- cp $60                                 ;   If sum = $60 then it's a /COM1 command
+ cp $60                                 ;   If sum = $60 then it is a /COM1 command
  jp z,CMD_COM1
- cp $62                                 ;   If sum = $62 then it's a /COM2 command
+ cp $62                                 ;   If sum = $62 then it is a /COM2 command
  jp z,CMD_COM1
- cp $3A                                 ;   If sum = $3A then it's a /IN command
+ cp $3A                                 ;   If sum = $3A then it is a /IN command
  jp z,CMD_IN
- cp $E6                                 ;   If sum = $E6 then it's a /OUT command
+ cp $E6                                 ;   If sum = $E6 then it is a /OUT command
  jp z,CMD_OUT
- cp $58                                 ;   If sum = $58 then it's a /SWAP command
- jp z,CMD_BANK
- cp $F6                                 ;   If sum = $f6 then it's a /RST command
+ cp $58                                 ;   If sum = $58 then it is a /SWAP command
+ jp z,CMD_BANK 
+ cp $F6                                 ;   If sum = $f6 then it is a /RST command
  jp z,CMD_RST
- cp $8D                                 ;   If sum = $8D then it's a /PRINT command
+ cp $8D                                 ;   If sum = $8D then it is a /PRINT command
  jp z,CMD_PRINT
- cp $35                                 ;   If sum = $35 then it's a /PEEK command
+ cp $35                                 ;   If sum = $35 then it is a /PEEK command
  jp z,CMD_PEEK
- cp $91                                 ;   If sum = $91 then it's a /POKE command
+ cp $91                                 ;   If sum = $91 then it is a /POKE command
  jp z,CMD_POKE
- cp $E7                                 ;   If sum = $E7 then it's a /PUSH command
- jp z,CMD_PUSH
- cp $CE                                 ;   If sum = $CE then it's a /POP command
- jp z,CMD_POP 
- cp $33                                 ;   If sum = $33 then it's a /CLEAR command
+ cp $33                                 ;   If sum = $33 then iti s a /CLEAR command
  jp z,CMD_CLEAR
+ cp $C6                                 ;   If sum = $c6 then it is a /SET command
+ jp z,CMD_SET
+ cp $66                                 ;   If sum = $66 then it is a /GET command
+ jp z,CMD_GET
+
  jp SYNTAX_ERROR                        ;   Else, its an error
 
 ; ******************************************
@@ -759,11 +769,10 @@ CMD_IN:                                 ; /IN AA
 
  ld c,a                                 ;   Save result from register [a] to [c]
  in a,(c)                               ;   Load peripheral data at address indicated by register c in register a
- push af
- ld a,' '                               ;   print space
- call Char_SEND
- pop af
- call BinToHex                          ;   Convert read byte to ascii and print it
+ 
+ call SET_OUTPUT_SINGLE_8
+ bit 0,b                                ;   Error held in register [b]
+ jp nz,SYNTAX_ERROR
  jp LOOP_RETURN                         ;   Go back to main loop (MAIN_LOOP)
 
 
@@ -808,6 +817,9 @@ CMD_PRINT:                              ; /PRINT AAAA - Print null-terminated st
  call GET_ARGUMENT_SINGLE_16            ;    Get string address
  bit 0,b
  jp nz,SYNTAX_ERROR
+
+ ld a,' '                               ;   print space
+ call Char_SEND
 CMD_PRINT_LOOP:
  ld a,(de)                              ;    load character from string address
  or a                                   ;    update flags
@@ -824,11 +836,11 @@ CMD_PEEK:                               ; /PEEK AAAA - return content from memor
  bit 0,b
  jp nz,SYNTAX_ERROR
 
- ld a,' '                               ;   print space
- call Char_SEND
-
  ld a,(de)
- call BinToHex                          ;   Convert read byte to ascii and print it
+
+ call SET_OUTPUT_SINGLE_8
+ bit 0,b                                ;   Error held in register [b]
+ jp nz,SYNTAX_ERROR
  jp LOOP_RETURN
 
 CMD_POKE:                               ; /POKE AAAA;BB - write BB into memory address AAAA
@@ -842,7 +854,7 @@ CMD_POKE:                               ; /POKE AAAA;BB - write BB into memory a
  cp ";"                                 ;   Else if keyboard buffer at hl is different than ';', go back to main loop (MAIN_LOOP)
  jp nz,SYNTAX_ERROR
 
- call GET_ARGUMENT_SINGLE_8             ;   Get port number as an 8-bit wide argument. Result in [a]
+ call GET_ARGUMENT_SINGLE_8             ;   Get number as an 8-bit wide argument. Result in [a]
  bit 0,b                                ;   Error held in register [b]
  jp nz,SYNTAX_ERROR
 
@@ -850,33 +862,50 @@ CMD_POKE:                               ; /POKE AAAA;BB - write BB into memory a
  ld (de),a
  jp LOOP_RETURN
 
-CMD_PUSH:                               ; /PUSH AAAA - push value AAAA into the stack
+CMD_CLEAR:                              ;   /CLEAR - clears the screen
+ ld b,30
+CMD_CLEAR_LOOP:
+ call PRINT_CR_LF
+ djnz CMD_CLEAR_LOOP
+ jp LOOP_RETURN
+
+CMD_SET:                                ;   /SET AAAA;BBBB - 16bit version of POKE to set variables
  ld hl,KEYBUFFER+4
  call GET_ARGUMENT_SINGLE_16            ;    Get memory address
  bit 0,b
  jp nz,SYNTAX_ERROR
  push de
+
+ call SEEK_CHAR                         ;   If keyboard buffer at hl is 'space', we search further                       
+ cp ";"                                 ;   Else if keyboard buffer at hl is different than ';', go back to main loop (MAIN_LOOP)
+ jp nz,SYNTAX_ERROR
+
+ call GET_ARGUMENT_SINGLE_16            ;   Get number as an 16-bit wide argument. Result in [de]
+ bit 0,b                                ;   Error held in register [b]
+ jp nz,SYNTAX_ERROR
+
+ pop hl
+ ld (hl),e
+ inc hl
+ ld (hl),d
  jp LOOP_RETURN
 
-CMD_POP:                                ; /POP - pop value from the stack
- ld a,' '                               ;   print space
- call Char_SEND
+CMD_GET:                                ;   /GET AAAA - 16bit version of PEEK to output variables 
+ ld hl,KEYBUFFER+4
+ call GET_ARGUMENT_SINGLE_16            ;   Get memory address
+ bit 0,b
+ jp nz,SYNTAX_ERROR
 
- pop hl                                 ;   Convert the most significant byte it to hexadecimal (ASCII format)
- push hl                                ;   Save reading address for later
- ld a,h
- call BinToHex
+ push hl
+ ex de,hl
+ ld e,(hl)
+ inc hl
+ ld d,(hl)
+ pop hl
 
- pop hl                                 ;   Convert the least significant byte it to hexadecimal (ASCII format)
- ld a,l
- call BinToHex
- jp LOOP_RETURN
-
-CMD_CLEAR:
- ld b,30
-CMD_CLEAR_LOOP:
- call PRINT_CR_LF
- djnz CMD_CLEAR_LOOP
+ call SET_OUTPUT_SINGLE_16
+ bit 0,b                                ;   Error held in register [b]
+ jp nz,SYNTAX_ERROR
  jp LOOP_RETURN
 
 ; COMMAND PIPLINE GETTERS ******************
@@ -884,34 +913,132 @@ CMD_CLEAR_LOOP:
 GET_ARGUMENT_SINGLE_8:
  ; Get a single 8-bit wide argument from the keyboard buffer
  ; [hl] = keybuffer index
- ; [b] = error
+ ; [b] = error (0 - ok / 1 - fail)
  ; [a] = output
- CALL SEEK_CHAR                         ; Skip 'spaces' in the key buffer
+ call SEEK_CHAR                         ; Skip 'spaces' in the key buffer
+ ; check special expressions
+ ld a,(hl)
+ cp '$'
+ jr z,GET_ARGUMENT_SINGLE_8_VAR_VALUE
  ; regular expression
- CALL HexToBin                          ; Convert value written in ascii hex into binary
+ call HexToBin                          ; Convert value written in ascii hex into binary
  ret                                    ; return
 
+GET_ARGUMENT_SINGLE_8_VAR_VALUE:
+ inc hl
+ call Get_Variable_Address
+ ld a,(de)
+ ret
 
 GET_ARGUMENT_SINGLE_16:
  ; Get a single 16-bit wide argument from the keyboard buffer
  ; [hl] = keybuffer index
- ; [b] = error
+ ; [b] = error (0 - ok / 1 - fail)
  ; [de] = output
- CALL SEEK_CHAR                         ; Skip 'spaces' in the key buffer
+ call SEEK_CHAR                         ; Skip 'spaces' in the key buffer
  ; check special expressions
  ld a,(hl)                              ; Look at the first argument character
  cp $22                                 ; Special expression '"' : local string address
  jr z,GET_ARGUMENT_SINGLE_16_STRING
+ cp '$'
+ jr z,GET_ARGUMENT_SINGLE_16_VAR_VALUE
+ cp '%'
+ jr z,GET_ARGUMENT_SINGLE_16_VAR_ADDR
  ; regular expression
- CALL HexToBin                          ; Convert the most significant byte written in ascii hex into binary
+ call HexToBin                          ; Convert the most significant byte written in ascii hex into binary
  ld d,a                                 ; Store result into [d]
  inc hl                                 ; Increment keybuffer index
- CALL HexToBin                          ; Convert the least significant byte written in ascii hex into binary
+ call HexToBin                          ; Convert the least significant byte written in ascii hex into binary
  ld e,a                                 ; Store result into [e]
  ret                                    ; return
 
 GET_ARGUMENT_SINGLE_16_STRING:
- ld de,hl
+ inc hl
+ ld de,hl                               ; Set string start address into [de]
+ res 0,b                                ; Reset error bit
+GET_ARGUMENT_SINGLE_16_STRING_SKIP:
+ ld a,(hl)
+ cp $22
+ ret z
+ inc hl
+ jr GET_ARGUMENT_SINGLE_16_STRING_SKIP
+
+GET_ARGUMENT_SINGLE_16_VAR_VALUE:
+ inc hl
+ call Get_Variable_Address
+ push hl
+ ex de,hl
+ ld e,(hl)
+ inc hl
+ ld d,(hl)
+ pop hl
+ ret
+
+GET_ARGUMENT_SINGLE_16_VAR_ADDR:
+ inc hl
+ call Get_Variable_Address
+ ret
+
+; COMMAND PIPLINE SETTERS ******************
+
+SET_OUTPUT_SINGLE_8:
+ ; Get a single 8-bit wide argument from the keyboard buffer
+ ; [a] = input
+ ; [b] = error (0 - ok / 1 - fail)
+
+ push af
+SET_OUTPUT_SINGLE_8_LOOP:
+ inc hl
+ ld a,(hl)
+ cp 00
+ jr z,SET_OUTPUT_SINGLE_8_DISPLAY
+ cp '>'
+ jr nz,SET_OUTPUT_SINGLE_8_LOOP
+ 
+ call GET_ARGUMENT_SINGLE_16            ;   Get number as an 16-bit wide argument. Result in [de] and error held in register [b]
+ pop af
+ ld (de),a
+ ret
+
+SET_OUTPUT_SINGLE_8_DISPLAY:
+ ld a,' '                               ;   print space
+ call Char_SEND
+ pop af
+ call BinToHex                          ;   Convert read byte to ascii and print it
+ ld b,0                                 ;   No errors, set b to 0
+ ret
+
+SET_OUTPUT_SINGLE_16:
+ ; Get a single 8-bit wide argument from the keyboard buffer
+ ; [de] = input
+ ; [b] = error (0 - ok / 1 - fail)
+ 
+ push de
+SET_OUTPUT_SINGLE_16_LOOP:
+ inc hl
+ ld a,(hl)
+ cp 00
+ jr z,SET_OUTPUT_SINGLE_16_DISPLAY
+ cp '>'
+ jr nz,SET_OUTPUT_SINGLE_16_LOOP
+ 
+ call GET_ARGUMENT_SINGLE_16            ;   Get number as an 16-bit wide argument. Result in [de] and error held in register [b]
+ pop hl
+ ex de,hl
+ ld (hl),e
+ inc hl
+ ld (hl),d
+ ret
+
+SET_OUTPUT_SINGLE_16_DISPLAY:
+ ld a,' '                               ;   print space
+ call Char_SEND
+ pop de
+ ld a,d
+ call BinToHex                          ;   Convert MSB byte to ascii and print it
+ ld a,e
+ call BinToHex                          ;   Convert LSB byte to ascii and print it
+ ld b,0                                 ;   No errors, set b to 0
  ret
 
 ; MISCELLANEOUS ****************************
@@ -939,6 +1066,29 @@ INC_16Bit_MemVal:                       ;   hl : address of the 16 bit value tha
  dec hl 
  ld (hl),e 
  ret
+
+Get_Variable_Address:                   ;   Outputs the address of the variable whose name is located at the address pointed by [de]
+ ld a,(hl)
+ cp '@'
+ jr c,Get_Variable_Address_Error
+ sub '@'                                ; substract 64 from the variable letter
+ rlca                                   ; rotate left to multiply by 2
+ push hl                                ; save hl to restore it later
+ ld hl,(VAR_MAP)                        ; load [hl] with the start of the variable memory space 
+ or a                                   ; reset the carry flag
+ ld b,0                                 ; reset [b]
+ ld c,a                                 ; load [a] into [c]
+ sbc hl,bc                              ; substract [a] from [hl]
+ dec hl                                 ; [hl]-1
+ ex de,hl                               ; exchange [hl] and [de]
+ pop hl                                 ; retrieve [hl]
+ ld b,0
+ ret
+
+Get_Variable_Address_Error:
+ ld b,1
+ ret
+
 
 SaveSerialChannel:                      ;   SaveSerialChannel : Stores current serial channel
  ld a,(COM_SELECT)
@@ -1011,10 +1161,10 @@ MemCheck_RAM_Error:
 MemCheck_RAM_Error_loop:
  ld de,$0418
 MemCheck_RAM_Error_wait:
- ld hl,$0000                            ; T=10, 2.50Âµs@4MHz
- dec de                                 ; T=6, 1.50Âµs@4MHz
- sbc hl,de                              ; T=15, 3.75Âµs@4MHz
- jr nz,MemCheck_RAM_Error_wait          ; T=7, 1.75Âµs@4MHz
+ ld hl,$0000                            ; T=10, 2.50µs@4MHz
+ dec de                                 ; T=6, 1.50µs@4MHz
+ sbc hl,de                              ; T=15, 3.75µs@4MHz
+ jr nz,MemCheck_RAM_Error_wait          ; T=7, 1.75µs@4MHz
  ld hl,(MemCheck_RAM_Error_msg+9)
  sbc hl,bc 
  ld a,(hl)
@@ -1086,7 +1236,7 @@ STARTUP_MSG:
  .db "ROM-OS v1.6.0 (c)2023 LE COSSEC Arnaud"
  .db $0D ; carriage return
  .db $0A ; line feed
- .db "32,511 BYTES FREE [Snapshot 26/10/23a]"
+ .db "32,511 BYTES FREE [Snapshot 21/12/23a]"
 READY:
  .db $0D ; carriage return
  .db $0A ; line feed
@@ -1238,7 +1388,7 @@ Random: ; RANDOM number generator : a = final result
 
 .org $2200
 ;*****************THIS SUBROUTINE WORKS !!!!
-Delay: ; de=input value --> 14.50 Âµs / cycle
+Delay: ; de=input value --> 14.50 µs / cycle
  dec de         ; T=6 , 1.50
  ld a,d         ; T=4 , 1.00
  cp $FF         ; T=7 , 1.75
