@@ -65,6 +65,8 @@
 ;                                            : /PUSH and /POP commands removed as they are proved dangerous
 ;                                            : /SET AAAA;BBBB & /GET AAAA implemented - they are 16bit versions of POKE and PEEK to manipulate variables
 ;                                            : Command output setters
+;                       [Snapshot_01_01_24a] : "." to insert commands into memory 
+;                                            : /LIST implemented
 ;*******************************************
 ; LABELS ASSIGNATION
 ;*******************************************
@@ -90,6 +92,8 @@ COM_SELECT     = $FF03
 COM1_DELAY     = $FF04
 COM2_DELAY     = $FF05
 
+BASIC_START    = $FF0A
+BASIC_POINTER  = $FF0C
 VAR_MAP        = $FF0E       ; Variable table address
  
 KEYBUFFER      = $FF10
@@ -220,6 +224,10 @@ STARTUP:
  ld hl,$FEFF                            ; Set VARMAP - this register tells the system where to store the user variables
  ld (VAR_MAP),hl
 
+ ld hl,$8000
+ ld (BASIC_START),hl                    ; Set BASIC_START and BASIC_POINTER
+ ld (BASIC_POINTER),hl
+
  ld a,$00                               ; Clear serial input buffers
  ld (RX_BUFFER_COM1),a
  ld (RX_BUFFER_COM2),a
@@ -273,8 +281,10 @@ KEY_ENTER:                              ; KEY_ENTER : Carriage Return has been e
  jp z,MONITOR
  cp "<"                                 ;   "<" : command for MONITOR-READ BACKWARD
  jp z,MON_READ_BACKWARD
- cp "/"                                 ;   "/" : command for command...wait, what ?
+ cp "/"                                 ;   "/" : command for commands...wait, what ?
  jp z,INTERPRETER_CMD
+ cp "."                                 ;   "." : store command in memory
+ jp z,STORE_CMD
  cp "0"                                 ;   "0" : HOME (Soft Reset)
  jp z,CMD_RST
  cp "#"                                 ;   "#" : shotcut for '/RUN'
@@ -609,8 +619,23 @@ INTERPRETER_CMD_2:                      ;   Character Selection
  jp z,CMD_SET
  cp $66                                 ;   If sum = $66 then it is a /GET command
  jp z,CMD_GET
+ cp $5F                                 ;   If sum = $5F then it is a /LIST command
+ jp z,CMD_LIST
 
  jp SYNTAX_ERROR                        ;   Else, its an error
+
+STORE_CMD:
+ ld bc,KEYBUFFER                        ; Start address of the transfer
+ ld hl,(KEYPOINTER)                     ; End address of the transfer
+ or a                                   ; Clear carry flag
+ sbc hl,bc                              ; Get transfer length from substracting end address from start address
+ ld bc,hl                               ; Length
+ inc bc                                 ; +1 to account for the 0 at the end of each command
+ ld hl,KEYBUFFER                        ; Source address
+ ld de,(BASIC_POINTER)                  ; Destination address 
+ ldir                                   ; Magic commmand
+ ld (BASIC_POINTER),de                  ; Update BASIC POINTER
+ jp LOOP_RETURN
 
 ; ******************************************
 ; COMMAND ROUTINES
@@ -907,6 +932,27 @@ CMD_GET:                                ;   /GET AAAA - 16bit version of PEEK to
  bit 0,b                                ;   Error held in register [b]
  jp nz,SYNTAX_ERROR
  jp LOOP_RETURN
+
+CMD_LIST:                               ;   /LIST - Print ZCL/BASIC program stored in memory
+ call PRINT_CR_LF
+ ld hl,(BASIC_START)
+CMD_LIST_LOOP:
+ ld a,(hl)
+ cp 0
+ jr z,CMD_LIST_NL
+ call Char_SEND
+CMD_LIST_LOOP_1:
+ inc hl
+ push hl
+ ld de,(BASIC_POINTER)
+ sbc hl,de
+ pop hl
+ jr nz,CMD_LIST_LOOP
+ jp LOOP_RETURN
+
+CMD_LIST_NL:
+ call PRINT_CR_LF
+ jr CMD_LIST_LOOP_1
 
 ; COMMAND PIPLINE GETTERS ******************
 
@@ -1236,7 +1282,7 @@ STARTUP_MSG:
  .db "ROM-OS v1.6.0 (c)2023 LE COSSEC Arnaud"
  .db $0D ; carriage return
  .db $0A ; line feed
- .db "32,511 BYTES FREE [Snapshot 21/12/23a]"
+ .db "32,511 BYTES FREE [Snapshot 01/01/24a]"
 READY:
  .db $0D ; carriage return
  .db $0A ; line feed
