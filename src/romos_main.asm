@@ -67,6 +67,7 @@
 ;                                            : Command output setters
 ;                       [Snapshot_01_01_24a] : "." to insert commands into memory 
 ;                                            : /LIST implemented
+;                       [Snapshot_13_01_24a] : Minitel ready
 ;*******************************************
 ; LABELS ASSIGNATION
 ;*******************************************
@@ -162,6 +163,7 @@ ACIA_RX_IRQ:                            ; IRQ handler for ACIA
  AND %10000000
  jr nz, IRQ_Return                      ;       If not, check COM2
  in a,(ACIA_RW | COM1)                  ;       If so, save RX register into RX buffer
+ and %01111111                          ;       remove parity bit
  ld (RX_BUFFER_COM1),a
 ;ACIA_RX_IRQ_Next:
 ; in a,(ACIA_RST_ST | COM2)             ;       Check if COM2 generated an interrupt 
@@ -193,14 +195,16 @@ NMI_Return:
 STARTUP:
                                         ; Initialize ACIA - COM1
  out (ACIA_RST_ST | COM1 ),a            ;       soft reset (value not important)
- ld a,%01101001                         ;       disable parity, echo mode , enable RX interrupt and enable reciver/transmiter
+ ;ld a,%00001001                         ;       disable parity, no echo mode , enable RX interrupt and enable receiver/transmitter
+ ld a,%00001001                         ;       even parity, no echo mode, enable RX interrupt and enable receiver/transmitter
  out (ACIA_CMD | COM1 ),a
- ld a,%00011100                         ;       4800 bauds; 8 data bits; no parity; 1 stop bit
+ ;ld a,%00011100                         ;       4800 bauds; 8 data bits; no parity; 1 stop bit
+ ld a,%00011000                         ;       1200 bauds; 7 data bits; 1 stop bit
  ld (COM1_SETTINGS),a                   ;       Save COM1 Settings
  out (ACIA_CTR | COM1),a 
                                         ; Initialize ACIA - COM2
  out (ACIA_RST_ST | COM2 ),a            ;       soft reset (value not important)
- ld a,%01101001                         ;       disable parity, echo mode , enable RX interrupt and enable reciver/transmiter
+ ld a,%01101001                         ;       disable parity, no echo mode , enable RX interrupt and enable receiver/transmitter
  out (ACIA_CMD | COM2 ),a
  ld a,%00011100                         ;       4800 bauds; 8 data bits; no parity; 1 stop bit
  ld (COM2_SETTINGS),a                   ;       Save COM2 Settings  
@@ -1162,6 +1166,25 @@ ChangeSerialChannel_2:
  ld a,COM2                              ;   Change COM channel for COM2
  ret
 
+Generate_Even_Parity:                   ; Generate even parity
+ push bc
+ and %01111111
+ push af
+ XOR 0
+ push af
+ pop bc
+ ld a,c
+ rrca
+ rrca
+ rrca
+ and %10000000
+ xor %10000000
+ ld c,a
+ pop af
+ or c
+ pop bc
+ ret
+
 ; Decodes an address written in ASCII
 Interpreter_ADDR:                       ; Interpreter_ADDR  de = address output / if a=1 then an error has occured
  inc hl                                 ;   Inc hl
@@ -1282,7 +1305,7 @@ STARTUP_MSG:
  .db "ROM-OS v1.6.0 (c)2023 LE COSSEC Arnaud"
  .db $0D ; carriage return
  .db $0A ; line feed
- .db "32,511 BYTES FREE [Snapshot 01/01/24a]"
+ .db "32,511 BYTES FREE [Snapshot 13/01/24a]"
 READY:
  .db $0D ; carriage return
  .db $0A ; line feed
@@ -1308,6 +1331,8 @@ Serial_SEND:                            ;   Load registers as follow hl = start 
  OR ACIA_RW
  ld c,a
  ld a,(hl)                              ;   Load data from address pointed by hl
+ 
+ call Generate_Even_Parity
 
  out (c),a                              ;   Output data to the 6551's transmit register
  
@@ -1340,6 +1365,9 @@ Char_1:
  ld c,a
 
  pop af                                 ;       Retrieve a
+
+ call Generate_Even_Parity
+
  out (c),a
  ret
 
@@ -1387,7 +1415,7 @@ BAUD_DELAY_TABLE:
  .db $02
  .db $08 ; 600 bauds
  .db $01
- .db $00 ; 1200 bauds
+ .db $80 ; 1200 bauds
  .db $00
  .db $B0 ; 1800 bauds
  .db $00
