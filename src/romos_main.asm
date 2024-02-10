@@ -68,6 +68,7 @@
 ;                       [Snapshot_01_01_24a] : "." to insert commands into memory 
 ;                                            : /LIST implemented
 ;                       [Snapshot_13_01_24a] : Minitel ready
+;                       [Snapshot_15_01_24a] : /EDIT
 ;*******************************************
 ; LABELS ASSIGNATION
 ;*******************************************
@@ -625,17 +626,20 @@ INTERPRETER_CMD_2:                      ;   Character Selection
  jp z,CMD_GET
  cp $5F                                 ;   If sum = $5F then it is a /LIST command
  jp z,CMD_LIST
-
+ cp $4F                                 ;   If sum = $4F then it is a /INSERT command
+ jp z,CMD_INSERT
+ cp $3E                                 ;   If sum = $3E then it is a /DEL command
+ jp z,CMD_DEL
  jp SYNTAX_ERROR                        ;   Else, its an error
 
 STORE_CMD:
- ld bc,KEYBUFFER                        ; Start address of the transfer
+ ld bc,KEYBUFFER+1                      ; Start address of the transfer - we exclude the '.'
  ld hl,(KEYPOINTER)                     ; End address of the transfer
  or a                                   ; Clear carry flag
  sbc hl,bc                              ; Get transfer length from substracting end address from start address
  ld bc,hl                               ; Length
  inc bc                                 ; +1 to account for the 0 at the end of each command
- ld hl,KEYBUFFER                        ; Source address
+ ld hl,KEYBUFFER+1                      ; Source address
  ld de,(BASIC_POINTER)                  ; Destination address 
  ldir                                   ; Magic commmand
  ld (BASIC_POINTER),de                  ; Update BASIC POINTER
@@ -940,15 +944,17 @@ CMD_GET:                                ;   /GET AAAA - 16bit version of PEEK to
 CMD_LIST:                               ;   /LIST - Print ZCL/BASIC program stored in memory
  call PRINT_CR_LF
  ld hl,(BASIC_START)
+ call CMD_LIST_PRINT_ADDR
 CMD_LIST_LOOP:
  ld a,(hl)
- cp 0
+ or a
  jr z,CMD_LIST_NL
  call Char_SEND
 CMD_LIST_LOOP_1:
  inc hl
  push hl
  ld de,(BASIC_POINTER)
+ dec de
  sbc hl,de
  pop hl
  jr nz,CMD_LIST_LOOP
@@ -956,7 +962,110 @@ CMD_LIST_LOOP_1:
 
 CMD_LIST_NL:
  call PRINT_CR_LF
+ call CMD_LIST_PRINT_ADDR
+
  jr CMD_LIST_LOOP_1
+
+CMD_LIST_PRINT_ADDR:
+ push hl
+ ld a,h
+ call BinToHex
+ pop hl
+ push hl
+ ld a,l
+ call BinToHex
+
+ ld a,' '                               ;   print space
+ call Char_SEND
+ pop hl
+ ret
+
+CMD_INSERT:                               ;   /INSERT AAAA - Allow lines to be inserted in the ZCL/BASIC program stored in memory
+ ld hl,KEYBUFFER+7
+ call GET_ARGUMENT_SINGLE_16              ;   Get memory address
+ bit 0,b
+ jp nz,SYNTAX_ERROR
+ ld (DE_CACHE),de
+
+ call SEEK_CHAR                         ;   If keyboard buffer at hl is 'space', we search further
+ cp ";"                                 ;   Else if keyboard buffer at hl is different than ';', display error
+ jp nz,SYNTAX_ERROR   
+ 
+ inc hl
+ ld bc,hl
+ push hl
+ 
+ ; search the size of the line to be inserted
+CMD_INSERT_SEARCH:
+ ld a,(hl)
+ or a
+ inc hl
+ jr nz,CMD_INSERT_SEARCH
+
+ or a ; clear the carry flag
+ sbc hl,bc
+ ld bc,hl
+ push bc
+
+ ; Move the existing program
+
+ ld hl,(BASIC_POINTER)
+ ld de,(DE_CACHE)
+ or a ; clear the carry flag
+ sbc hl,de
+ push hl
+
+ ld hl,(BASIC_POINTER)
+ add hl,bc
+ ;inc hl
+ ld de,hl
+
+ pop bc
+ ld hl,(BASIC_POINTER)
+
+ ld (BASIC_POINTER),de
+
+ lddr
+ 
+ pop bc
+ pop hl
+ ld de,(DE_CACHE)
+ inc de
+
+ ldir
+
+ ;xor a
+ ;ld (de),a
+
+ jp LOOP_RETURN
+
+CMD_DEL:                                ;   /DEL AAAA - Delete the specified line in the ZCL/BASIC program stored in memory
+ ld hl,KEYBUFFER+4
+ call GET_ARGUMENT_SINGLE_16            ;   Get memory address
+ bit 0,b
+ jp nz,SYNTAX_ERROR
+ push de
+ ; search the end of the line to delete
+ ld hl,de
+CMD_DEL_SEARCH_END:
+ inc hl
+ ld a,(hl)
+ or a
+ jp nz,CMD_DEL_SEARCH_END
+ ;inc hl
+ ; Get length
+ ld de,(BASIC_POINTER)
+ push hl
+ ex de,hl
+ or a                                   ; clear carry flag
+ sbc hl,de
+ ld bc,hl
+ pop hl                                 ; length of transfer
+ pop de
+ ; Magic command
+ ldir
+ ld (BASIC_POINTER),de
+ jp LOOP_RETURN
 
 ; COMMAND PIPLINE GETTERS ******************
 
@@ -1305,7 +1414,7 @@ STARTUP_MSG:
  .db "ROM-OS v1.6.0 (c)2023 LE COSSEC Arnaud"
  .db $0D ; carriage return
  .db $0A ; line feed
- .db "32,511 BYTES FREE [Snapshot 13/01/24a]"
+ .db "32,511 BYTES FREE [Snapshot 15/01/24a]"
 READY:
  .db $0D ; carriage return
  .db $0A ; line feed
