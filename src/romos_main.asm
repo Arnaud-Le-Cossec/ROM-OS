@@ -70,6 +70,7 @@
 ;                       [Snapshot_13_01_24a] : Minitel ready
 ;                       [Snapshot_15_01_24a] : /INSERT and /DEL
 ;                       [Snapshot_20_04_24a] : ZCL/BASIC Engine
+;                       [Snapshot_20_04_24b] : /PRINT update : New line "\n"
 ;*******************************************
 ; LABELS ASSIGNATION
 ;*******************************************
@@ -891,8 +892,24 @@ CMD_PRINT_LOOP:
  jp z,LOOP_RETURN                       ;    return if null character
  cp $22 ; "
  jp z,LOOP_RETURN                       ;    return if " character
+ cp $5C ; \
+ jr z,CMD_PRINT_SPECIAL                 ;    handle '\' special characters
  call Char_SEND                         ;    else print character to terminal
  inc de                                 ;    next character
+ jr CMD_PRINT_LOOP
+
+CMD_PRINT_SPECIAL:
+ inc de
+ ld a,(de)
+ cp 'n'
+ call z,PRINT_CR_LF
+ cp $5C ; \
+ call z,Char_SEND
+ cp 0
+ jp z,LOOP_RETURN                       ;    return if null character
+ cp $22 ; "
+ jp z,LOOP_RETURN    
+ inc de
  jr CMD_PRINT_LOOP
 
 CMD_PEEK:                               ; /PEEK AAAA - return content from memory address AAAA
@@ -1466,7 +1483,7 @@ STARTUP_MSG:
  .db "ROM-OS v1.6.0 (c)2023 LE COSSEC Arnaud"
  .db $0D ; carriage return
  .db $0A ; line feed
- .db "32,511 BYTES FREE [Snapshot 20/04/24a]"
+ .db "32,511 BYTES FREE [Snapshot 20/04/24b]"
 READY:
  .db $0D ; carriage return
  .db $0A ; line feed
