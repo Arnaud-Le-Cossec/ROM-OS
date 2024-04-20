@@ -68,7 +68,8 @@
 ;                       [Snapshot_01_01_24a] : "." to insert commands into memory 
 ;                                            : /LIST implemented
 ;                       [Snapshot_13_01_24a] : Minitel ready
-;                       [Snapshot_15_01_24a] : /EDIT
+;                       [Snapshot_15_01_24a] : /INSERT and /DEL
+;                       [Snapshot_20_04_24a] : ZCL/BASIC Engine
 ;*******************************************
 ; LABELS ASSIGNATION
 ;*******************************************
@@ -94,9 +95,12 @@ COM_SELECT     = $FF03
 COM1_DELAY     = $FF04
 COM2_DELAY     = $FF05
 
-BASIC_START    = $FF0A
-BASIC_POINTER  = $FF0C
-VAR_MAP        = $FF0E       ; Variable table address
+BASIC_FLAG     = $FF07  ; BASIC Flag
+BASIC_PC       = $FF08  ; BASIC program counter 
+
+EDIT_START     = $FF0A
+EDIT_END       = $FF0C
+VAR_MAP        = $FF0E  ; Variable table address
  
 KEYBUFFER      = $FF10
 STACK          = $FFDF
@@ -230,8 +234,8 @@ STARTUP:
  ld (VAR_MAP),hl
 
  ld hl,$8000
- ld (BASIC_START),hl                    ; Set BASIC_START and BASIC_POINTER
- ld (BASIC_POINTER),hl
+ ld (EDIT_START),hl                    ; Set EDIT_START and EDIT_END
+ ld (EDIT_END),hl
 
  ld a,$00                               ; Clear serial input buffers
  ld (RX_BUFFER_COM1),a
@@ -332,13 +336,27 @@ SYNTAX_ERROR:                           ; SYNTAX_ERROR : handles the typing erro
  ld de,$0D
  call Serial_SEND
 
+ ; Reset the basic flag
+ ld a,(BASIC_FLAG)
+ res 0,a
+ ld (BASIC_FLAG),a
+
+ ; continue to LOOP RETURN
+
+; LOOP RETURN ********************************
+
 LOOP_RETURN:                            ; LOOP_RETURN : Restoration point for programs and commands to re-enter the MAIN_LOOP
+ ld a,(BASIC_FLAG)
+ bit 0,a
+ jr nz,LOOP_RETURN_BASIC
+
+LOOP_RETURN_CLASSIC:
  ld hl,KEYBUFFER                        ;   Initialize hl
  ld b,$50
-LOOP_RETURN_1:                          ;   Clear KEYBUFFER with 0
+LOOP_RETURN_CLASSIC_1:                  ;   Clear KEYBUFFER with 0
  ld (hl),$0 
  inc hl   
- DJNZ LOOP_RETURN_1
+ DJNZ LOOP_RETURN_CLASSIC_1
 
  ld hl,KEYBUFFER                        ;   Initialize KEYPOINTER with the start of the keybuffer
  ld (KEYPOINTER),hl
@@ -348,6 +366,24 @@ LOOP_RETURN_1:                          ;   Clear KEYBUFFER with 0
  call Serial_SEND
 
  jp MAIN_LOOP                            ;   Go back to the main loop
+
+LOOP_RETURN_BASIC:
+ ld a,(RX_BUFFER_COM1)
+ cp $1B                                  ;  <esc>
+ jp nz,LOOP_RETURN_BASIC_NEXT
+ ; If user pressed <escape>, we exit from basic mode
+ ld a,(BASIC_FLAG)
+ res 0,a
+ ld (BASIC_FLAG),a
+ ; Classic loop return
+ jp LOOP_RETURN_CLASSIC
+
+LOOP_RETURN_BASIC_NEXT:
+ ld hl,(BASIC_PC)
+ call SEEK_NULL
+ ld (BASIC_PC),hl
+ inc hl
+ jp INTERPRETER_CMD_BASIC
 
 ; APPS *************************************
 
@@ -576,8 +612,9 @@ MON_JUMP:                               ; MON_JUMP : jump to a specified address
 ; In command : /IN AA (returns value)
 
 INTERPRETER_CMD:                        ; INTERPRETER_CMD : Decode commands
- ld c,$0
  ld hl,KEYBUFFER+1
+INTERPRETER_CMD_BASIC:
+ ld c,$0   
 INTERPRETER_CMD_1:                      ;   Associate the letters of the command in one single byte for easier selection later
  ld a,(hl)                              ;   Load character at hl (in the keyboard buffer)
  cp $0                                  ;   'void' OR 'space' stop this process and we jump to the command selection 
@@ -592,12 +629,12 @@ INTERPRETER_CMD_1:                      ;   Associate the letters of the command
  inc hl                                 ;   Increment hl 
  jr INTERPRETER_CMD_1                   ;   Loop back
 
-INTERPRETER_CMD_2:                      ;   Character Selection
+INTERPRETER_CMD_2:                      ;   Character Selection 
  ld a,c                                 ;   Load the sum from register c
  cp $F2                                 ;   If sum = $F2 then it is a /RUN command
- jr z,CMD_RUN
+ jp z,CMD_RUN
  cp $27                                 ;   If sum = $27 then it is a /LOAD command
- jr z,CMD_LOAD                          
+ jp z,CMD_LOAD                          
  cp $7D                                 ;   If sum = $7D then it is a /SAVE command
  jp z,CMD_SAVE
  cp $60                                 ;   If sum = $60 then it is a /COM1 command
@@ -630,6 +667,10 @@ INTERPRETER_CMD_2:                      ;   Character Selection
  jp z,CMD_INSERT
  cp $3E                                 ;   If sum = $3E then it is a /DEL command
  jp z,CMD_DEL
+ cp $D4                                 ;   If sum = $D4 then it is a /BASIC command
+ jp z,CMD_BASIC
+ cp $5A                                 ;   If sum = $5A then it is a /END command
+ jp z,CMD_END
  jp SYNTAX_ERROR                        ;   Else, its an error
 
 STORE_CMD:
@@ -640,9 +681,9 @@ STORE_CMD:
  ld bc,hl                               ; Length
  inc bc                                 ; +1 to account for the 0 at the end of each command
  ld hl,KEYBUFFER+1                      ; Source address
- ld de,(BASIC_POINTER)                  ; Destination address 
+ ld de,(EDIT_END)              ; Destination address 
  ldir                                   ; Magic commmand
- ld (BASIC_POINTER),de                  ; Update BASIC POINTER
+ ld (EDIT_END),de              ; Update BASIC END POINTER
  jp LOOP_RETURN
 
 ; ******************************************
@@ -658,8 +699,6 @@ CMD_RUN:                               ; /RUN COMMAND
  jp LOOP_RETURN                         ;   User program terminated, go back to main loop
 
 CMD_LOAD:                               ; /LOAD AAAA;C COMMAND
- ld hl,KEYBUFFER+4
-
  call GET_ARGUMENT_SINGLE_16
  bit 0,b
  jp nz,SYNTAX_ERROR
@@ -730,8 +769,6 @@ CMD_LOAD_ERROR:                         ;   CMD_LOAD_ERROR
  jp LOOP_RETURN                         ;   Go back to main loop (MAIN_LOOP)
  
 CMD_SAVE:                               ; /SAVE AAAA,BBBB,C      (AAAA: Start Address, BBBB: End Address, C: COM Channel)
- ld hl,KEYBUFFER+4
-
  call GET_ARGUMENT_SINGLE_16
  bit 0,b
  jp nz,SYNTAX_ERROR
@@ -795,7 +832,6 @@ CMD_COM2:                               ; /COM2
  jp LOOP_RETURN
 
 CMD_IN:                                 ; /IN AA
- ld hl,KEYBUFFER+2
  call GET_ARGUMENT_SINGLE_8             ;   Get port number as an 8-bit wide argument. Result in [a]
  bit 0,b                                ;   Error held in register [b]
  jp nz,SYNTAX_ERROR
@@ -810,8 +846,6 @@ CMD_IN:                                 ; /IN AA
 
 
 CMD_OUT:                                ; /OUT PP;AA
- ld hl,KEYBUFFER+3
-
  call GET_ARGUMENT_SINGLE_8             ;   Get port number as an 8-bit wide argument. Result in [a]
  bit 0,b                                ;   Error held in register [b]
  jp nz,SYNTAX_ERROR
@@ -833,7 +867,6 @@ CMD_OUT:                                ; /OUT PP;AA
 
 
 CMD_BANK:                               ; /BANK AA ( ISSUE II specific)
- ld hl,KEYBUFFER+4
  call GET_ARGUMENT_SINGLE_8             ;   Get port number as an 8-bit wide argument. Result in [a]                                
  bit 0,b                                ;   Error held in register [b]
  jp nz,SYNTAX_ERROR                     ;   ...Then send an error
@@ -846,7 +879,6 @@ CMD_RST:                                ; /RST - WARM RESET (RAM not erased)
  jp WARM_BOOT                           ; Reset to $0000
 
 CMD_PRINT:                              ; /PRINT AAAA - Print null-terminated string at address AAAA
- ld hl,KEYBUFFER+5
  call GET_ARGUMENT_SINGLE_16            ;    Get string address
  bit 0,b
  jp nz,SYNTAX_ERROR
@@ -864,7 +896,6 @@ CMD_PRINT_LOOP:
  jr CMD_PRINT_LOOP
 
 CMD_PEEK:                               ; /PEEK AAAA - return content from memory address AAAA
- ld hl,KEYBUFFER+4
  call GET_ARGUMENT_SINGLE_16            ;    Get memory address
  bit 0,b
  jp nz,SYNTAX_ERROR
@@ -877,7 +908,6 @@ CMD_PEEK:                               ; /PEEK AAAA - return content from memor
  jp LOOP_RETURN
 
 CMD_POKE:                               ; /POKE AAAA;BB - write BB into memory address AAAA
- ld hl,KEYBUFFER+4
  call GET_ARGUMENT_SINGLE_16            ;    Get memory address
  bit 0,b
  jp nz,SYNTAX_ERROR
@@ -903,7 +933,6 @@ CMD_CLEAR_LOOP:
  jp LOOP_RETURN
 
 CMD_SET:                                ;   /SET AAAA;BBBB - 16bit version of POKE to set variables
- ld hl,KEYBUFFER+4
  call GET_ARGUMENT_SINGLE_16            ;    Get memory address
  bit 0,b
  jp nz,SYNTAX_ERROR
@@ -924,7 +953,6 @@ CMD_SET:                                ;   /SET AAAA;BBBB - 16bit version of PO
  jp LOOP_RETURN
 
 CMD_GET:                                ;   /GET AAAA - 16bit version of PEEK to output variables 
- ld hl,KEYBUFFER+4
  call GET_ARGUMENT_SINGLE_16            ;   Get memory address
  bit 0,b
  jp nz,SYNTAX_ERROR
@@ -943,7 +971,7 @@ CMD_GET:                                ;   /GET AAAA - 16bit version of PEEK to
 
 CMD_LIST:                               ;   /LIST - Print ZCL/BASIC program stored in memory
  call PRINT_CR_LF
- ld hl,(BASIC_START)
+ ld hl,(EDIT_START)
  call CMD_LIST_PRINT_ADDR
 CMD_LIST_LOOP:
  ld a,(hl)
@@ -953,7 +981,7 @@ CMD_LIST_LOOP:
 CMD_LIST_LOOP_1:
  inc hl
  push hl
- ld de,(BASIC_POINTER)
+ ld de,(EDIT_END)
  dec de
  sbc hl,de
  pop hl
@@ -981,7 +1009,6 @@ CMD_LIST_PRINT_ADDR:
  ret
 
 CMD_INSERT:                               ;   /INSERT AAAA - Allow lines to be inserted in the ZCL/BASIC program stored in memory
- ld hl,KEYBUFFER+7
  call GET_ARGUMENT_SINGLE_16              ;   Get memory address
  bit 0,b
  jp nz,SYNTAX_ERROR
@@ -1009,21 +1036,21 @@ CMD_INSERT_SEARCH:
 
  ; Move the existing program
 
- ld hl,(BASIC_POINTER)
+ ld hl,(EDIT_END)
  ld de,(DE_CACHE)
  or a ; clear the carry flag
  sbc hl,de
  push hl
 
- ld hl,(BASIC_POINTER)
+ ld hl,(EDIT_END)
  add hl,bc
  ;inc hl
  ld de,hl
 
  pop bc
- ld hl,(BASIC_POINTER)
+ ld hl,(EDIT_END)
 
- ld (BASIC_POINTER),de
+ ld (EDIT_END),de
 
  lddr
  
@@ -1034,13 +1061,9 @@ CMD_INSERT_SEARCH:
 
  ldir
 
- ;xor a
- ;ld (de),a
-
  jp LOOP_RETURN
 
 CMD_DEL:                                ;   /DEL AAAA - Delete the specified line in the ZCL/BASIC program stored in memory
- ld hl,KEYBUFFER+4
  call GET_ARGUMENT_SINGLE_16            ;   Get memory address
  bit 0,b
  jp nz,SYNTAX_ERROR
@@ -1054,7 +1077,7 @@ CMD_DEL_SEARCH_END:
  jp nz,CMD_DEL_SEARCH_END
  ;inc hl
  ; Get length
- ld de,(BASIC_POINTER)
+ ld de,(EDIT_END)
  push hl
  ex de,hl
  or a                                   ; clear carry flag
@@ -1064,7 +1087,30 @@ CMD_DEL_SEARCH_END:
  pop de
  ; Magic command
  ldir
- ld (BASIC_POINTER),de
+ ld (EDIT_END),de
+ jp LOOP_RETURN
+
+
+CMD_BASIC:                              ;   /BASIC AAAA - Starts a ZCL/BASIC program
+ call GET_ARGUMENT_SINGLE_16              ;   Get memory address
+ bit 0,b
+ jp nz,SYNTAX_ERROR
+ ; Set the start 
+ ld (BASIC_PC),de
+ ; Set the basic flag
+ ld a,(BASIC_FLAG)
+ set 0,a
+ ld (BASIC_FLAG),a
+
+ ld hl,de
+ jp INTERPRETER_CMD_BASIC
+
+
+CMD_END:                                ;   /END - Stops a ZCL/BASIC program
+ ; Reset the basic flag
+ ld a,(BASIC_FLAG)
+ res 0,a
+ ld (BASIC_FLAG),a
  jp LOOP_RETURN
 
 ; COMMAND PIPLINE GETTERS ******************
@@ -1209,12 +1255,19 @@ PRINT_CR_LF:
  call Char_SEND
  ret
 
-SEEK_CHAR:                              ;  SEEK_CHAR If keyboard buffer at hl is 'space', we search further  
+SEEK_CHAR:                              ;  SEEK_CHAR If buffer at hl is 'space', we search further  
  inc hl
  ld a,(hl)
  cp $20
  jr z,SEEK_CHAR
  ret
+
+SEEK_NULL:                             ;  SPACE_SPACE If buffer at hl isn't 'null', we search further
+ inc hl 
+ ld a,(hl)
+ or a
+ jr nz,SEEK_NULL                        ;  continue if not null
+ ret                                    ;  return if null
 
 INC_16Bit_MemVal:                       ;   hl : address of the 16 bit value that will be incremented
  ld e,(hl)
@@ -1247,7 +1300,6 @@ Get_Variable_Address:                   ;   Outputs the address of the variable 
 Get_Variable_Address_Error:
  ld b,1
  ret
-
 
 SaveSerialChannel:                      ;   SaveSerialChannel : Stores current serial channel
  ld a,(COM_SELECT)
@@ -1339,10 +1391,10 @@ MemCheck_RAM_Error:
 MemCheck_RAM_Error_loop:
  ld de,$0418
 MemCheck_RAM_Error_wait:
- ld hl,$0000                            ; T=10, 2.50µs@4MHz
- dec de                                 ; T=6, 1.50µs@4MHz
- sbc hl,de                              ; T=15, 3.75µs@4MHz
- jr nz,MemCheck_RAM_Error_wait          ; T=7, 1.75µs@4MHz
+ ld hl,$0000                            ; T=10, 2.50ï¿½s@4MHz
+ dec de                                 ; T=6, 1.50ï¿½s@4MHz
+ sbc hl,de                              ; T=15, 3.75ï¿½s@4MHz
+ jr nz,MemCheck_RAM_Error_wait          ; T=7, 1.75ï¿½s@4MHz
  ld hl,(MemCheck_RAM_Error_msg+9)
  sbc hl,bc 
  ld a,(hl)
@@ -1414,7 +1466,7 @@ STARTUP_MSG:
  .db "ROM-OS v1.6.0 (c)2023 LE COSSEC Arnaud"
  .db $0D ; carriage return
  .db $0A ; line feed
- .db "32,511 BYTES FREE [Snapshot 15/01/24a]"
+ .db "32,511 BYTES FREE [Snapshot 20/04/24a]"
 READY:
  .db $0D ; carriage return
  .db $0A ; line feed
@@ -1571,7 +1623,7 @@ Random: ; RANDOM number generator : a = final result
 
 .org $2200
 ;*****************THIS SUBROUTINE WORKS !!!!
-Delay: ; de=input value --> 14.50 µs / cycle
+Delay: ; de=input value --> 14.50 ï¿½s / cycle
  dec de         ; T=6 , 1.50
  ld a,d         ; T=4 , 1.00
  cp $FF         ; T=7 , 1.75
